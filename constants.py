@@ -6,8 +6,8 @@ import os
 # ---------------------------------------------------------------------------
 # App version & update feed
 # ---------------------------------------------------------------------------
-VERSION     = "1.0.0"
-GITHUB_REPO = "your-username/ed-nav"   # ← replace after creating the repo
+VERSION     = "1.0.1"
+GITHUB_REPO = "s4nby/ed-nav"
 
 # ---------------------------------------------------------------------------
 # File paths

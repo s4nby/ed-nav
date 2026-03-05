@@ -84,6 +84,7 @@ class CoordWindow(QWidget):
 
     target_set     = pyqtSignal(float, float, float)  # lat, lon, radius_m
     target_cleared = pyqtSignal()
+    move_overlay   = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -125,6 +126,9 @@ class CoordWindow(QWidget):
     # ------------------------------------------------------------------
     # Public API called from main's push_nav()
     # ------------------------------------------------------------------
+
+    def set_move_mode(self, active: bool) -> None:
+        self._move_btn.setText("Done Moving" if active else "Move Overlay")
 
     def update_status(self, nav: NavResult, has_target: bool) -> None:
         # Silently absorb live planet radius for Haversine accuracy
@@ -284,6 +288,11 @@ class CoordWindow(QWidget):
         btn_layout.addWidget(self._set_btn)
         btn_layout.addWidget(self._clear_btn)
         layout.addLayout(btn_layout)
+
+        # Move overlay button
+        self._move_btn = self._make_button("Move Overlay")
+        self._move_btn.clicked.connect(self.move_overlay)
+        layout.addWidget(self._move_btn)
 
     # ------------------------------------------------------------------
     # Event filter — Ctrl+V paste intercept on lat field

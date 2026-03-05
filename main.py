@@ -16,6 +16,7 @@
 #   • CoordWindow Set/Clear → update tracker target
 #   • nav_timer (300ms) → push NavResult to overlay + CoordWindow
 
+import ctypes
 import sys
 
 from PyQt6.QtCore    import QSettings, QTimer, QUrl
@@ -33,6 +34,10 @@ from constants    import POLL_INTERVAL_MS, VERSION, GITHUB_REPO
 
 
 def main():
+    # Give this process its own App User Model ID so Windows uses the
+    # Qt window icon for the taskbar button instead of python.exe's icon.
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ED.Navigator.App")
+
     app = QApplication(sys.argv)
     app.setApplicationName("ED Surface Navigator")
     # Keep running even when CoordWindow is the last visible window and is closed
@@ -96,11 +101,13 @@ def main():
             tray.set_overlay_visible(True)
         overlay.enter_move_mode()
         tray.set_move_mode(True)
+        coord_window.set_move_mode(True)
         _state["move_mode"] = True
 
     def _exit_move_mode():
         overlay.exit_move_mode()
         tray.set_move_mode(False)
+        coord_window.set_move_mode(False)
         _state["move_mode"] = False
 
     # ------------------------------------------------------------------
@@ -127,6 +134,7 @@ def main():
 
     tray.toggle_overlay.connect(_toggle_overlay)
     tray.move_overlay.connect(_toggle_move_mode)
+    coord_window.move_overlay.connect(_toggle_move_mode)
     tray.open_settings.connect(lambda: (coord_window.show(), coord_window.raise_()))
     tray.quit_app.connect(app.quit)
 
@@ -160,8 +168,8 @@ def main():
         nav_timer.stop()
         # Save overlay position one last time
         settings = QSettings("ED-Navigator", "Overlay")
-        settings.setValue("overlay/x", overlay.x())
-        settings.setValue("overlay/y", overlay.y())
+        settings.remove("overlay/x")
+        settings.remove("overlay/y")
         settings.setValue("journal/last_system", journal.get_system())
         hotkey.close()
 

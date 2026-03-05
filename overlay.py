@@ -74,9 +74,11 @@ class OverlayCanvas(QWidget):
 
     def mousePressEvent(self, event):
         if self._move_mode and event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start = event.globalPosition().toPoint()
-        else:
-            super().mousePressEvent(event)
+            pos = event.position()
+            if 3 <= pos.x() <= WINDOW_WIDTH - 3 and 3 <= pos.y() <= WINDOW_HEIGHT - 3:
+                self._drag_start = event.globalPosition().toPoint()
+                return
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._move_mode and self._drag_start is not None:
@@ -240,6 +242,11 @@ class OverlayCanvas(QWidget):
 
     def _draw_move_mode(self, p: QPainter) -> None:
         """Dashed border + DRAG label when repositioning."""
+        # Fill with near-zero alpha so layered-window hit testing catches
+        # all clicks inside the rectangle (fully transparent pixels are
+        # ignored by Win32 even when WS_EX_TRANSPARENT is removed).
+        p.fillRect(self.rect(), QColor(0, 0, 0, 8))
+
         orange = QColor(COLOR_ORANGE)
         orange.setAlpha(200)
         p.setPen(QPen(orange, 1.5, Qt.PenStyle.DashLine))
@@ -286,10 +293,10 @@ class OverlayWindow(QWidget):
                 sg.top()  + 80,
             )
 
+
     def showEvent(self, event):
         super().showEvent(event)
         self._apply_click_through()
-        self._restore_position()
 
     def toggle_visibility(self) -> bool:
         if self.isVisible():
@@ -308,7 +315,6 @@ class OverlayWindow(QWidget):
     def exit_move_mode(self) -> None:
         self._canvas.set_move_mode(False)
         self.setCursor(Qt.CursorShape.ArrowCursor)
-        self._save_position()
         self._apply_click_through()
 
     def update_nav(self, nav: NavResult, has_target: bool) -> None:
