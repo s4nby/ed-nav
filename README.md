@@ -1,4 +1,4 @@
-# ED Surface Navigator
+# ED  Navigator
 
 A lightweight desktop overlay for **Elite Dangerous** that guides you to any
 surface location on a landable planet. It reads your current position and
