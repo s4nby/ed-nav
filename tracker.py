@@ -5,6 +5,9 @@
 # Thread-safe: GameTracker runs a background polling thread and exposes
 # state via properties protected by a threading.Lock.
 
+import ctypes
+import ctypes.wintypes as _wt
+import datetime
 import json
 import math
 import os
@@ -25,22 +28,68 @@ FLAG_HAS_LAT_LONG = 0x200000    # bit 21 — HasLatLong (lat/lon present in Stat
 FLAG_IN_SRV       = 0x4000000   # bit 26 — InSrv (player is in Surface Rover Vehicle)
 
 
+# ---------------------------------------------------------------------------
+# Win32 process presence check
+# ---------------------------------------------------------------------------
+
+class _PROCESSENTRY32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize",              _wt.DWORD),
+        ("cntUsage",            _wt.DWORD),
+        ("th32ProcessID",       _wt.DWORD),
+        ("th32DefaultHeapID",   ctypes.POINTER(ctypes.c_ulong)),
+        ("th32ModuleID",        _wt.DWORD),
+        ("cntThreads",          _wt.DWORD),
+        ("th32ParentProcessID", _wt.DWORD),
+        ("pcPriClassBase",      ctypes.c_long),
+        ("dwFlags",             _wt.DWORD),
+        ("szExeFile",           ctypes.c_char * 260),
+    ]
+
+_ED_EXE = b"EliteDangerous64.exe"
+
+
+def _is_ed_running() -> bool:
+    """Return True if EliteDangerous64.exe is present in the process list."""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        snap = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+        if snap == ctypes.wintypes.HANDLE(-1).value:
+            return True  # Can't enumerate; assume running to avoid false negatives
+        entry = _PROCESSENTRY32()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32)
+        found = False
+        if kernel32.Process32First(snap, ctypes.byref(entry)):
+            while True:
+                if entry.szExeFile == _ED_EXE:
+                    found = True
+                    break
+                if not kernel32.Process32Next(snap, ctypes.byref(entry)):
+                    break
+        kernel32.CloseHandle(snap)
+        return found
+    except Exception:
+        return True  # Fail-safe: don't hide overlay if check errors
+
+
 class PlayerState:
     """Snapshot of one Status.json read."""
     __slots__ = ("latitude", "longitude", "heading", "altitude",
-                 "has_lat_long", "in_srv", "valid",
+                 "has_lat_long", "in_srv", "valid", "flags", "timestamp_utc",
                  "body_name", "planet_radius_m")
 
     def __init__(self):
-        self.latitude:   Optional[float] = None
-        self.longitude:  Optional[float] = None
-        self.heading:    Optional[float] = None
-        self.altitude:   Optional[float] = None
-        self.has_lat_long: bool = False
-        self.in_srv:       bool = False
-        self.valid:        bool = False   # True if file was parsed successfully
-        self.body_name:    Optional[str]   = None
-        self.planet_radius_m: Optional[float] = None
+        self.latitude:      Optional[float]            = None
+        self.longitude:     Optional[float]            = None
+        self.heading:       Optional[float]            = None
+        self.altitude:      Optional[float]            = None
+        self.has_lat_long:  bool                       = False
+        self.in_srv:        bool                       = False
+        self.valid:         bool                       = False
+        self.flags:         int                        = 0
+        self.timestamp_utc: Optional[datetime.datetime] = None
+        self.body_name:     Optional[str]              = None
+        self.planet_radius_m: Optional[float]          = None
 
 
 class NavResult:
@@ -134,6 +183,7 @@ def _parse_status(path: str) -> PlayerState:
             data = json.load(fh)
 
         flags = int(data.get("Flags", 0))
+        state.flags        = flags
         state.has_lat_long = bool(flags & FLAG_HAS_LAT_LONG)
         state.in_srv       = bool(flags & FLAG_IN_SRV)
 
@@ -150,6 +200,15 @@ def _parse_status(path: str) -> PlayerState:
         raw_radius = data.get("PlanetRadius")
         if raw_radius is not None:
             state.planet_radius_m = float(raw_radius)
+
+        raw_ts = data.get("timestamp")
+        if raw_ts:
+            try:
+                state.timestamp_utc = datetime.datetime.fromisoformat(
+                    raw_ts.replace("Z", "+00:00")
+                )
+            except ValueError:
+                pass
 
         state.valid = True
 
@@ -181,6 +240,7 @@ class GameTracker:
 
         self._thread: Optional[threading.Thread] = None
         self._running: bool = False
+        self._ed_running: bool = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -217,6 +277,14 @@ class GameTracker:
     def has_target(self) -> bool:
         with self._lock:
             return self._target_lat is not None
+
+    def is_in_game(self) -> bool:
+        """True when EliteDangerous64.exe is running and Status.json flags are non-zero."""
+        with self._lock:
+            if not self._ed_running:
+                return False
+            p = self._player
+            return p.valid and p.flags != 0
 
     def get_player_state(self) -> PlayerState:
         """Return a copy of the latest player state."""
@@ -270,8 +338,15 @@ class GameTracker:
 
     def _poll_loop(self) -> None:
         interval_s = POLL_INTERVAL_MS / 1000.0
+        poll_count = 0
+        ed_running = _is_ed_running()  # check immediately on start
         while self._running:
             state = _parse_status(STATUS_JSON_PATH)
+            poll_count += 1
+            if poll_count >= 30:        # re-check process every ~3 s
+                poll_count = 0
+                ed_running = _is_ed_running()
             with self._lock:
-                self._player = state
+                self._player     = state
+                self._ed_running = ed_running
             time.sleep(interval_s)

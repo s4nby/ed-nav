@@ -31,9 +31,11 @@ GWL_EXSTYLE       = -20
 WS_EX_LAYERED     = 0x00080000
 WS_EX_TRANSPARENT = 0x00000020
 
-# Needle pivot point (centre of rotation)
-_CX = WINDOW_WIDTH  // 2
-_CY = WINDOW_HEIGHT // 2 - 6   # shift slightly up to leave room for text
+# Aspect ratio
+_ASPECT = WINDOW_HEIGHT / WINDOW_WIDTH   # ~0.727
+
+# Resize grip size (px) — bottom-right corner hit area
+_RESIZE_GRIP = 14
 
 
 class OverlayCanvas(QWidget):
@@ -41,15 +43,19 @@ class OverlayCanvas(QWidget):
 
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
+        self.setMouseTracking(True)
 
         self._display_angle: float = 0.0
         self._pulse_phase:   float = 0.0
+        self._idle_phase:    float = 0.0
 
         self._nav:        NavResult = NavResult()
         self._has_target: bool      = False
 
-        self._move_mode:  bool            = False
-        self._drag_start: Optional[QPoint] = None
+        self._move_mode:    bool             = False
+        self._drag_start:   Optional[QPoint] = None
+        self._resize_start: Optional[QPoint] = None
+        self._initial_size: tuple[int, int]  = (0, 0)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -64,9 +70,28 @@ class OverlayCanvas(QWidget):
         self._has_target = has_target
 
     def set_move_mode(self, active: bool) -> None:
-        self._move_mode  = active
-        self._drag_start = None
+        self._move_mode    = active
+        self._drag_start   = None
+        self._resize_start = None
         self.update()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _scale(self) -> float:
+        """Scale factor relative to default overlay size."""
+        return self.width() / WINDOW_WIDTH
+
+    def _cx(self) -> int:
+        return self.width() // 2
+
+    def _cy(self) -> int:
+        return self.height() // 2 - int(6 * self._scale())
+
+    def _in_resize_grip(self, pos) -> bool:
+        return (pos.x() >= self.width()  - _RESIZE_GRIP
+                and pos.y() >= self.height() - _RESIZE_GRIP)
 
     # ------------------------------------------------------------------
     # Mouse (move mode only)
@@ -75,25 +100,50 @@ class OverlayCanvas(QWidget):
     def mousePressEvent(self, event):
         if self._move_mode and event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
-            if 3 <= pos.x() <= WINDOW_WIDTH - 3 and 3 <= pos.y() <= WINDOW_HEIGHT - 3:
+            if self._in_resize_grip(pos):
+                self._resize_start = event.globalPosition().toPoint()
+                self._initial_size = (self.window().width(), self.window().height())
+                return
+            if 3 <= pos.x() <= self.width() - 3 and 3 <= pos.y() <= self.height() - 3:
                 self._drag_start = event.globalPosition().toPoint()
                 return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self._move_mode and self._drag_start is not None:
-            delta = event.globalPosition().toPoint() - self._drag_start
-            win   = self.window()
-            win.move(win.pos() + delta)
-            self._drag_start = event.globalPosition().toPoint()
-        else:
-            super().mouseMoveEvent(event)
+        if self._move_mode:
+            pos = event.position()
+
+            # Cursor feedback when hovering (no button held)
+            if not (self._drag_start or self._resize_start):
+                if self._in_resize_grip(pos):
+                    self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                else:
+                    self.setCursor(Qt.CursorShape.SizeAllCursor)
+
+            # Resize — lock to aspect ratio
+            if self._resize_start is not None:
+                delta = event.globalPosition().toPoint() - self._resize_start
+                new_w = max(WINDOW_WIDTH, self._initial_size[0] + delta.x())
+                new_h = round(new_w * _ASPECT)
+                self.window().resize(new_w, new_h)
+                return
+
+            # Drag
+            if self._drag_start is not None:
+                delta = event.globalPosition().toPoint() - self._drag_start
+                win   = self.window()
+                win.move(win.pos() + delta)
+                self._drag_start = event.globalPosition().toPoint()
+                return
+
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if self._move_mode and event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start = None
-        else:
-            super().mouseReleaseEvent(event)
+            self._drag_start   = None
+            self._resize_start = None
+            return
+        super().mouseReleaseEvent(event)
 
     # ------------------------------------------------------------------
     # Animation
@@ -107,6 +157,8 @@ class OverlayCanvas(QWidget):
             self._display_angle = (self._display_angle + arc) % 360.0
         if nav.arrived:
             self._pulse_phase += PULSE_SPEED
+        if nav.has_lat_long and not self._has_target and not nav.arrived:
+            self._idle_phase += 0.18
         self.update()
 
     # ------------------------------------------------------------------
@@ -118,7 +170,6 @@ class OverlayCanvas(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        # Always clear to fully transparent first
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
         p.fillRect(self.rect(), Qt.GlobalColor.transparent)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
@@ -129,14 +180,14 @@ class OverlayCanvas(QWidget):
             return
 
         nav = self._nav
-
-        # Nothing to show — stay invisible
-        if not nav.has_lat_long or not self._has_target:
+        if not nav.has_lat_long:
             p.end()
             return
 
         if nav.arrived:
             self._draw_arrived(p, nav.distance_m)
+        elif not self._has_target:
+            self._draw_idle(p)
         else:
             self._draw_needle(p, self._display_angle)
             self._draw_distance(p, nav.distance_m)
@@ -144,120 +195,135 @@ class OverlayCanvas(QWidget):
         p.end()
 
     # ------------------------------------------------------------------
-    # Drawing helpers
+    # Drawing helpers — all dimensions scaled by self._scale()
     # ------------------------------------------------------------------
 
     def _draw_needle(self, p: QPainter, angle_deg: float) -> None:
-        """Slim two-part compass needle at angle_deg (0 = up = straight ahead)."""
+        s   = self._scale()
         rad = math.radians(angle_deg)
-        # Forward unit vector (screen: up is −y)
-        fx =  math.sin(rad)
-        fy = -math.cos(rad)
-        # Perpendicular
-        px =  math.cos(rad)
-        py =  math.sin(rad)
+        fx  =  math.sin(rad)
+        fy  = -math.cos(rad)
+        px  =  math.cos(rad)
+        py  =  math.sin(rad)
 
-        cx, cy = _CX, _CY
+        cx, cy = self._cx(), self._cy()
+        nl, nt, hw = NEEDLE_LENGTH * s, NEEDLE_TAIL * s, NEEDLE_HALF_W * s
 
-        # ── Forward triangle (bright) ──────────────────────────────────
-        tip = (cx + NEEDLE_LENGTH * fx,  cy + NEEDLE_LENGTH * fy)
-        bl  = (cx + NEEDLE_HALF_W * px,  cy + NEEDLE_HALF_W * py)
-        br  = (cx - NEEDLE_HALF_W * px,  cy - NEEDLE_HALF_W * py)
+        # Forward triangle
+        tip = (cx + nl * fx,  cy + nl * fy)
+        bl  = (cx + hw * px,  cy + hw * py)
+        br  = (cx - hw * px,  cy - hw * py)
 
         fwd_color = QColor(COLOR_ORANGE)
         fwd_color.setAlpha(NEEDLE_ALPHA)
-
         path = QPainterPath()
-        path.moveTo(*tip)
-        path.lineTo(*bl)
-        path.lineTo(*br)
+        path.moveTo(*tip); path.lineTo(*bl); path.lineTo(*br)
         path.closeSubpath()
-
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(fwd_color))
         p.drawPath(path)
 
-        # ── Tail triangle (dim) ────────────────────────────────────────
-        tail  = (cx - NEEDLE_TAIL * fx,        cy - NEEDLE_TAIL * fy)
-        tw    = NEEDLE_HALF_W * 0.55
-        tl    = (cx + tw * px,  cy + tw * py)
-        tr    = (cx - tw * px,  cy - tw * py)
+        # Tail triangle
+        tail = (cx - nt * fx,      cy - nt * fy)
+        tw   = hw * 0.55
+        tl   = (cx + tw * px,  cy + tw * py)
+        tr   = (cx - tw * px,  cy - tw * py)
 
         tail_color = QColor(COLOR_ORANGE)
         tail_color.setAlpha(NEEDLE_TAIL_ALPHA)
-
         path2 = QPainterPath()
-        path2.moveTo(*tail)
-        path2.lineTo(*tl)
-        path2.lineTo(*tr)
+        path2.moveTo(*tail); path2.lineTo(*tl); path2.lineTo(*tr)
         path2.closeSubpath()
-
         p.setBrush(QBrush(tail_color))
         p.drawPath(path2)
 
-        # ── Centre pivot dot ───────────────────────────────────────────
+        # Pivot dot
         dot_color = QColor(COLOR_ORANGE)
         dot_color.setAlpha(180)
         p.setBrush(QBrush(dot_color))
-        p.drawEllipse(QPoint(cx, cy), 2, 2)
+        r = max(1, round(2 * s))
+        p.drawEllipse(QPoint(cx, cy), r, r)
 
     def _draw_distance(self, p: QPainter, distance_m: Optional[float]) -> None:
-        """Small distance label below the needle."""
         if distance_m is None:
             return
-        if distance_m >= 1000.0:
-            text = f"{distance_m / 1000.0:.1f} km"
-        else:
-            text = f"{int(distance_m)} m"
-
+        text = f"{distance_m / 1000.0:.1f} km" if distance_m >= 1000.0 else f"{int(distance_m)} m"
+        s    = self._scale()
         color = QColor(COLOR_ORANGE)
         color.setAlpha(TEXT_ALPHA)
         p.setPen(QPen(color))
-        p.setFont(QFont(FONT_FAMILY, FONT_SIZE_DIST))
+        p.setFont(QFont(FONT_FAMILY, max(6, round(FONT_SIZE_DIST * s))))
         p.drawText(
-            QRectF(0, WINDOW_HEIGHT - 20, WINDOW_WIDTH, 18),
+            QRectF(0, self.height() - 20 * s, self.width(), 18 * s),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
             text,
         )
 
     def _draw_arrived(self, p: QPainter, distance_m: Optional[float]) -> None:
-        """Pulsing dot + distance when within arrival threshold."""
-        pulse = 0.55 + 0.45 * abs(math.sin(self._pulse_phase))
-        cx, cy = _CX, _CY
+        s      = self._scale()
+        pulse  = 0.55 + 0.45 * abs(math.sin(self._pulse_phase))
+        cx, cy = self._cx(), self._cy()
 
         color = QColor(COLOR_ORANGE)
         color.setAlpha(int(240 * pulse))
-        p.setPen(QPen(color, 1.5))
+        p.setPen(QPen(color, 1.5 * s))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        r = int(6 + 4 * pulse)
+        r = int((6 + 4 * pulse) * s)
         p.drawEllipse(QPoint(cx, cy), r, r)
 
         dot = QColor(COLOR_ORANGE)
         dot.setAlpha(int(200 * pulse))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(dot))
-        p.drawEllipse(QPoint(cx, cy), 3, 3)
+        rd = max(1, round(3 * s))
+        p.drawEllipse(QPoint(cx, cy), rd, rd)
 
         self._draw_distance(p, distance_m)
 
+    def _draw_idle(self, p: QPainter) -> None:
+        s         = self._scale()
+        cx, cy    = self._cx(), self._cy()
+        r         = max(2, round(3 * s))
+        spacing   = round(11 * s)
+        amplitude = 4 * s
+
+        color = QColor(COLOR_ORANGE)
+        color.setAlpha(TEXT_ALPHA)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(color))
+
+        for i in range(3):
+            phase = self._idle_phase + i * (2 * math.pi / 3)
+            x = cx + (i - 1) * spacing
+            y = cy - round(amplitude * math.sin(phase))
+            p.drawEllipse(QPoint(x, y), r, r)
+
     def _draw_move_mode(self, p: QPainter) -> None:
-        """Dashed border + DRAG label when repositioning."""
-        # Fill with near-zero alpha so layered-window hit testing catches
-        # all clicks inside the rectangle (fully transparent pixels are
-        # ignored by Win32 even when WS_EX_TRANSPARENT is removed).
+        w, h = self.width(), self.height()
+        s    = self._scale()
+
+        # Near-zero alpha fill so Win32 hit-testing works on transparent pixels
         p.fillRect(self.rect(), QColor(0, 0, 0, 8))
 
         orange = QColor(COLOR_ORANGE)
         orange.setAlpha(200)
         p.setPen(QPen(orange, 1.5, Qt.PenStyle.DashLine))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(3, 3, WINDOW_WIDTH - 6, WINDOW_HEIGHT - 6)
+        p.drawRect(3, 3, w - 6, h - 6)
 
-        font = QFont(FONT_FAMILY, 9)
+        font = QFont(FONT_FAMILY, max(6, round(9 * s)))
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
         p.setFont(font)
         p.setPen(QPen(orange))
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "DRAG")
+
+        # Resize grip — diagonal lines at bottom-right corner
+        grip = QColor(COLOR_ORANGE)
+        grip.setAlpha(180)
+        p.setPen(QPen(grip, 1.5))
+        for i in range(3):
+            offset = 4 + i * 4
+            p.drawLine(w - 4, h - 4 - offset, w - 4 - offset, h - 4)
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +345,8 @@ class OverlayWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        self.setFixedSize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.setMinimumSize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
 
         self._canvas = OverlayCanvas(self)
         self._canvas.setGeometry(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -293,6 +360,9 @@ class OverlayWindow(QWidget):
                 sg.top()  + 80,
             )
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._canvas.setGeometry(0, 0, self.width(), self.height())
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -310,7 +380,6 @@ class OverlayWindow(QWidget):
             self.show()
         self._remove_click_through()
         self._canvas.set_move_mode(True)
-        self.setCursor(Qt.CursorShape.SizeAllCursor)
 
     def exit_move_mode(self) -> None:
         self._canvas.set_move_mode(False)
@@ -345,7 +414,7 @@ class OverlayWindow(QWidget):
             pass
 
     # ------------------------------------------------------------------
-    # Position persistence
+    # Position persistence (kept for future use)
     # ------------------------------------------------------------------
 
     def _save_position(self) -> None:

@@ -135,8 +135,8 @@ def main():
     tray.toggle_overlay.connect(_toggle_overlay)
     tray.move_overlay.connect(_toggle_move_mode)
     coord_window.move_overlay.connect(_toggle_move_mode)
+    coord_window.toggle_overlay.connect(_toggle_overlay)
     tray.open_settings.connect(lambda: (coord_window.show(), coord_window.raise_()))
-    tray.quit_app.connect(app.quit)
 
     coord_window.target_set.connect(
         lambda lat, lon, r: tracker.set_target(lat, lon, r)
@@ -166,14 +166,18 @@ def main():
         tracker.stop()
         journal.stop()
         nav_timer.stop()
-        # Save overlay position one last time
         settings = QSettings("ED-Navigator", "Overlay")
         settings.remove("overlay/x")
         settings.remove("overlay/y")
         settings.setValue("journal/last_system", journal.get_system())
         hotkey.close()
 
+    def _quit():
+        _on_quit()
+        sys.exit(0)
+
     app.aboutToQuit.connect(_on_quit)
+    tray.quit_app.connect(_quit)
 
     sys.exit(app.exec())
 
