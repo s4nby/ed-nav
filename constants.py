@@ -6,7 +6,7 @@ import os
 # ---------------------------------------------------------------------------
 # App version & update feed
 # ---------------------------------------------------------------------------
-VERSION     = "1.0.5"
+VERSION     = "1.0.6"
 GITHUB_REPO = "s4nby/ed-nav"
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ NEEDLE_HALF_W    = 6     # half-width at the base
 # ---------------------------------------------------------------------------
 RENDER_FPS           = 30
 RENDER_INTERVAL_MS   = 1000 // RENDER_FPS   # ~33 ms
-MAX_ROTATE_PER_FRAME = 15.0                 # degrees/frame — faster than old ring
+MAX_ROTATE_PER_FRAME = 25.0                 # degrees/frame
 PULSE_SPEED          = 0.08                 # arrival pulse (radians/frame)
 
 # ---------------------------------------------------------------------------

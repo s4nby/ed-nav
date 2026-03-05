@@ -133,14 +133,14 @@ class JournalWatcher:
         if kind in ("FSDJump", "CarrierJump", "Location"):
             system = ev.get("StarSystem", "")
             with self._lock:
-                prev = self._system
                 self._bodies = []
                 self._system = system
                 # New system relative to last app session → require a scan
                 self._scan_required = (system != self._last_session_system)
-            if system and system != prev:
+            if system:
+                # Always backfill: a new journal file resets bodies even in the
+                # same system, so we must search old files unconditionally.
                 self._backfill(system)
-                # If backfill found bodies we already know this system — no scan needed
                 with self._lock:
                     if self._bodies:
                         self._scan_required = False

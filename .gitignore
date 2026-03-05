@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PyInstaller
+build/
+dist/
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

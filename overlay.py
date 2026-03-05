@@ -9,22 +9,35 @@ import ctypes
 import math
 from typing import Optional
 
-from PyQt6.QtCore    import Qt, QTimer, QPoint, QRectF
+from PyQt6.QtCore    import Qt, QTimer, QPoint, QPointF, QRectF
 from PyQt6.QtCore    import QSettings
-from PyQt6.QtGui     import QColor, QPainter, QPen, QBrush, QFont, QPainterPath
+from PyQt6.QtGui     import (QColor, QPainter, QPen, QBrush, QFont,
+                              QFontMetrics, QPainterPath)
 from PyQt6.QtWidgets import QWidget, QApplication
 
 from constants import (
     WINDOW_WIDTH, WINDOW_HEIGHT,
     NEEDLE_LENGTH, NEEDLE_TAIL, NEEDLE_HALF_W,
-    NEEDLE_ALPHA, NEEDLE_TAIL_ALPHA, TEXT_ALPHA,
-    COLOR_ORANGE,
+    NEEDLE_ALPHA, TEXT_ALPHA,
+    COLOR_ORANGE, COLOR_ERROR,
     FONT_FAMILY, FONT_SIZE_DIST,
     RENDER_INTERVAL_MS,
-    MAX_ROTATE_PER_FRAME, PULSE_SPEED,
+    MAX_ROTATE_PER_FRAME,
+    PULSE_SPEED,
     ARRIVAL_DISTANCE_M,
 )
+
 from tracker import NavResult, shortest_arc
+
+# Needle color thresholds (bearing error in degrees)
+_BEARING_BLUE_THRESH   = 10.0   # ≤ 10° off → blue (on track)
+_BEARING_ORANGE_THRESH = 45.0   # ≤ 45° off → orange (slightly off)
+# > 45° → red (way off)
+_COLOR_BLUE = "#4499FF"
+
+_SPEED_SCALE_MAX = 80.0    # m/s at which the tail reaches maximum elongation
+_NEEDLE_SCALE    = 1.15    # needle geometry multiplier (slightly larger than base)
+
 
 # Win32 constants
 GWL_EXSTYLE       = -20
@@ -46,8 +59,17 @@ class OverlayCanvas(QWidget):
         self.setMouseTracking(True)
 
         self._display_angle: float = 0.0
+        self._speed_scale:   float = 1.0   # tail length multiplier from speed
         self._pulse_phase:   float = 0.0
         self._idle_phase:    float = 0.0
+
+        # Flight-path angle derived from position deltas (altitude + distance)
+        self._flight_angle:  Optional[float] = None
+        self._prev_nav_alt:  Optional[float] = None
+        self._prev_nav_dist: Optional[float] = None
+
+        # GPS dropout grace period — absorbs brief has_lat_long flickers
+        self._gps_lost_frames: int = 0
 
         self._nav:        NavResult = NavResult()
         self._has_target: bool      = False
@@ -88,6 +110,10 @@ class OverlayCanvas(QWidget):
 
     def _cy(self) -> int:
         return self.height() // 2 - int(6 * self._scale())
+
+    def _needle_cx(self) -> float:
+        """X pivot of the needle — shifted left to leave room for the inclination panel."""
+        return self.width() * 0.32
 
     def _in_resize_grip(self, pos) -> bool:
         return (pos.x() >= self.width()  - _RESIZE_GRIP
@@ -151,14 +177,45 @@ class OverlayCanvas(QWidget):
 
     def _tick(self) -> None:
         nav = self._nav
+
+        # ── Bearing tracking (clamped rate) ───────────────────────────
         if nav.relative_bearing is not None and not nav.arrived:
-            arc = shortest_arc(self._display_angle, nav.relative_bearing)
-            arc = max(-MAX_ROTATE_PER_FRAME, min(MAX_ROTATE_PER_FRAME, arc))
-            self._display_angle = (self._display_angle + arc) % 360.0
+            err  = shortest_arc(self._display_angle, nav.relative_bearing)
+            step = max(-MAX_ROTATE_PER_FRAME, min(MAX_ROTATE_PER_FRAME, err))
+            self._display_angle = (self._display_angle + step) % 360.0
+
+        # ── Flight-path angle from position deltas ────────────────────
+        # Computed from altitude + distance changes between nav updates.
+        # Only updates when the position actually changes (nav refresh rate
+        # is ~100 ms; ticks between updates see zero delta and are skipped).
+        alt  = nav.altitude_m
+        dist = nav.distance_m
+        if alt is not None and dist is not None:
+            if self._prev_nav_alt is not None and self._prev_nav_dist is not None:
+                d_alt  = alt  - self._prev_nav_alt    # negative = descending
+                d_dist = self._prev_nav_dist - dist   # positive = approaching
+                if abs(d_alt) > 0.5 or abs(d_dist) > 0.5:
+                    raw = math.degrees(math.atan2(-d_alt, max(d_dist, 0.1)))
+                    if self._flight_angle is not None:
+                        self._flight_angle = 0.5 * self._flight_angle + 0.5 * raw
+                    else:
+                        self._flight_angle = raw
+            self._prev_nav_alt  = alt
+            self._prev_nav_dist = dist
+        else:
+            self._flight_angle  = None
+            self._prev_nav_alt  = None
+            self._prev_nav_dist = None
+
+        # ── Speed scale — tail elongates with ship speed ───────────────
+        spd = nav.speed_ms or 0.0
+        self._speed_scale = 1.0 + min(1.0, spd / _SPEED_SCALE_MAX) * 0.55
+
+        # ── Misc ──────────────────────────────────────────────────────
         if nav.arrived:
             self._pulse_phase += PULSE_SPEED
-        if nav.has_lat_long and not self._has_target and not nav.arrived:
-            self._idle_phase += 0.18
+        if not self._has_target and not nav.arrived:
+            self._idle_phase += 0.2094  # 2π / (1.0 s × 30 FPS) → 1 s left-to-right sweep
         self.update()
 
     # ------------------------------------------------------------------
@@ -180,69 +237,202 @@ class OverlayCanvas(QWidget):
             return
 
         nav = self._nav
-        if not nav.has_lat_long:
+
+        # Idle dots: show as long as no target is set — GPS not required.
+        # This ensures the user always sees the app is active.
+        if not self._has_target and not nav.arrived:
+            self._draw_idle(p)
             p.end()
             return
 
+        if not nav.has_lat_long:
+            self._gps_lost_frames += 1
+            if self._gps_lost_frames < 6:   # ~200 ms grace at 30 fps
+                p.end()
+                return
+            self._draw_approach_planet(p)
+            p.end()
+            return
+        else:
+            self._gps_lost_frames = 0
+
         if nav.arrived:
             self._draw_arrived(p, nav.distance_m)
-        elif not self._has_target:
-            self._draw_idle(p)
         else:
-            self._draw_needle(p, self._display_angle)
+            needle_color = self._bearing_color(nav.relative_bearing)
+            self._draw_needle(p, self._display_angle, needle_color)
+            self._draw_inclination(p, nav)
             self._draw_distance(p, nav.distance_m)
 
         p.end()
 
     # ------------------------------------------------------------------
+    # Bearing → needle colour
+    # ------------------------------------------------------------------
+
+    def _bearing_color(self, rel_bearing: Optional[float]) -> QColor:
+        """Return blue / orange / red based on how far off the heading is."""
+        if rel_bearing is None:
+            return QColor(COLOR_ORANGE)
+        # shortest error from dead-ahead (0°)
+        error = min(rel_bearing, 360.0 - rel_bearing)
+        if error <= _BEARING_BLUE_THRESH:
+            return QColor(_COLOR_BLUE)
+        elif error <= _BEARING_ORANGE_THRESH:
+            return QColor(COLOR_ORANGE)
+        else:
+            return QColor(COLOR_ERROR)
+
+    # ------------------------------------------------------------------
     # Drawing helpers — all dimensions scaled by self._scale()
     # ------------------------------------------------------------------
 
-    def _draw_needle(self, p: QPainter, angle_deg: float) -> None:
+    def _draw_needle(self, p: QPainter, angle_deg: float, color: QColor) -> None:
+        """
+        2D flat arrow pointing toward the target bearing.
+        0° = tip up (target straight ahead); degrees increase clockwise.
+        Arrow: filled triangle head + dimmer rectangular shaft + pivot dot.
+        """
         s   = self._scale()
-        rad = math.radians(angle_deg)
-        fx  =  math.sin(rad)
-        fy  = -math.cos(rad)
-        px  =  math.cos(rad)
-        py  =  math.sin(rad)
+        ns  = s * _NEEDLE_SCALE   # needle-specific scale (slightly larger)
+        cx  = self._needle_cx()
+        cy  = float(self._cy())
 
-        cx, cy = self._cx(), self._cy()
-        nl, nt, hw = NEEDLE_LENGTH * s, NEEDLE_TAIL * s, NEEDLE_HALF_W * s
+        fwd = NEEDLE_LENGTH * ns
+        aft = NEEDLE_TAIL   * ns * self._speed_scale
+        hw  = NEEDLE_HALF_W * ns  # arrowhead half-width
+        sw  = hw * 0.38           # shaft half-width
 
-        # Forward triangle
-        tip = (cx + nl * fx,  cy + nl * fy)
-        bl  = (cx + hw * px,  cy + hw * py)
-        br  = (cx - hw * px,  cy - hw * py)
+        # Clockwise rotation from "up" in screen space.
+        # Local +y axis = forward (up on screen when angle=0).
+        rad   = math.radians(angle_deg)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
 
-        fwd_color = QColor(COLOR_ORANGE)
-        fwd_color.setAlpha(NEEDLE_ALPHA)
-        path = QPainterPath()
-        path.moveTo(*tip); path.lineTo(*bl); path.lineTo(*br)
-        path.closeSubpath()
+        def rot(lx: float, ly: float):
+            rx =  lx * cos_a + ly * sin_a
+            ry = -lx * sin_a + ly * cos_a
+            return cx + rx, cy - ry   # flip ry: screen y is down
+
+        tip = rot(0,    fwd)
+        bl  = rot(-hw,  0)
+        br  = rot( hw,  0)
+        sl  = rot(-sw,  0)
+        sr  = rot( sw,  0)
+        tl  = rot(-sw, -aft)
+        tr  = rot( sw, -aft)
+
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(fwd_color))
-        p.drawPath(path)
 
-        # Tail triangle
-        tail = (cx - nt * fx,      cy - nt * fy)
-        tw   = hw * 0.55
-        tl   = (cx + tw * px,  cy + tw * py)
-        tr   = (cx - tw * px,  cy - tw * py)
+        # Shaft — dimmer fill
+        shaft = QPainterPath()
+        shaft.moveTo(*sl)
+        shaft.lineTo(*tl)
+        shaft.lineTo(*tr)
+        shaft.lineTo(*sr)
+        shaft.closeSubpath()
+        shaft_color = QColor(color)
+        shaft_color.setAlpha(int(NEEDLE_ALPHA * 0.40))
+        p.setBrush(QBrush(shaft_color))
+        p.drawPath(shaft)
 
-        tail_color = QColor(COLOR_ORANGE)
-        tail_color.setAlpha(NEEDLE_TAIL_ALPHA)
-        path2 = QPainterPath()
-        path2.moveTo(*tail); path2.lineTo(*tl); path2.lineTo(*tr)
-        path2.closeSubpath()
-        p.setBrush(QBrush(tail_color))
-        p.drawPath(path2)
+        # Arrowhead triangle
+        head = QPainterPath()
+        head.moveTo(*tip)
+        head.lineTo(*bl)
+        head.lineTo(*br)
+        head.closeSubpath()
+        head_color = QColor(color)
+        head_color.setAlpha(NEEDLE_ALPHA)
+        p.setBrush(QBrush(head_color))
+        p.drawPath(head)
 
         # Pivot dot
-        dot_color = QColor(COLOR_ORANGE)
-        dot_color.setAlpha(180)
+        dot_r = max(1.5, 2.0 * ns)
+        dot_color = QColor(color)
+        dot_color.setAlpha(220)
         p.setBrush(QBrush(dot_color))
-        r = max(1, round(2 * s))
-        p.drawEllipse(QPoint(cx, cy), r, r)
+        p.drawEllipse(QPointF(cx, cy), dot_r, dot_r)
+
+    def _draw_inclination(self, p: QPainter, nav: NavResult) -> None:
+        """
+        Pitch guidance in the right panel: 'XX° ▲' or 'XX° ▼'.
+        Single arrow to the right of the degree value:
+          ▲ — descent too steep, pull up (shallower)
+          ▼ — descent too shallow, push down (steeper)
+        Arrow hidden when on-target (within ±2° dead-band).
+        """
+        angle = nav.target_descent_angle_deg
+        if angle is None or nav.altitude_m is None or nav.altitude_m < 50.0:
+            return
+
+        angle = max(-60.0, min(90.0, angle))
+
+        s  = self._scale()
+        ns = s * _NEEDLE_SCALE
+
+        # ── Pitch direction ───────────────────────────────────────────
+        # Uses _flight_angle: the actual flight-path angle derived from
+        # altitude + distance position deltas, updated each time nav refreshes.
+        # Thresholds clamped to ±89° so extreme angles stay reachable.
+        need_up = need_down = False
+        if self._flight_angle is not None:
+            lower = max(-89.0, angle - 2.0)
+            upper = min( 89.0, angle + 2.0)
+            need_down = self._flight_angle < lower
+            need_up   = self._flight_angle > upper
+
+        on_target = (self._flight_angle is not None
+                     and not need_up and not need_down)
+
+        # ── Layout ───────────────────────────────────────────────────
+        panel_left = self._needle_cx() + NEEDLE_LENGTH * ns + 8 * s
+        panel_w    = self.width() - panel_left
+        mid        = float(self._cy())
+
+        font_sz = max(8, round(10 * s))
+        font    = QFont(FONT_FAMILY, font_sz)
+        text_h  = font_sz * 1.4 * s
+        text_str = f"{angle:.0f}\u00b0"
+
+        text_w = QFontMetrics(font).horizontalAdvance(text_str)
+
+        ah  = max(3, round(5 * s))   # arrow height
+        aw  = max(3, round(4 * s))   # arrow half-base
+        gap = max(2, round(3 * s))   # gap between text and arrow
+
+        # Centre the text+arrow unit in the panel
+        arrow_w  = aw * 2 if (need_up or need_down) else 0
+        unit_w   = text_w + (gap + arrow_w if arrow_w else 0)
+        start_x  = panel_left + (panel_w - unit_w) / 2.0
+        arrow_cx = start_x + text_w + gap + aw
+
+        # Degree text — blue when on-target, orange otherwise
+        col = QColor(_COLOR_BLUE if on_target else COLOR_ORANGE)
+        col.setAlpha(TEXT_ALPHA)
+        p.setPen(QPen(col))
+        p.setFont(font)
+        p.drawText(
+            QRectF(start_x, mid - text_h / 2, text_w + 2, text_h),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            text_str,
+        )
+
+        # Single directional arrow — hidden when on-target
+        if need_up or need_down:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(col))
+            arrow = QPainterPath()
+            if need_up:
+                arrow.moveTo(arrow_cx,      mid - ah / 2)
+                arrow.lineTo(arrow_cx - aw, mid + ah / 2)
+                arrow.lineTo(arrow_cx + aw, mid + ah / 2)
+            else:
+                arrow.moveTo(arrow_cx,      mid + ah / 2)
+                arrow.lineTo(arrow_cx - aw, mid - ah / 2)
+                arrow.lineTo(arrow_cx + aw, mid - ah / 2)
+            arrow.closeSubpath()
+            p.drawPath(arrow)
 
     def _draw_distance(self, p: QPainter, distance_m: Optional[float]) -> None:
         if distance_m is None:
@@ -254,7 +444,7 @@ class OverlayCanvas(QWidget):
         p.setPen(QPen(color))
         p.setFont(QFont(FONT_FAMILY, max(6, round(FONT_SIZE_DIST * s))))
         p.drawText(
-            QRectF(0, self.height() - 20 * s, self.width(), 18 * s),
+            QRectF(0, self.height() - 15 * s, self.width(), 18 * s),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
             text,
         )
@@ -281,22 +471,37 @@ class OverlayCanvas(QWidget):
         self._draw_distance(p, distance_m)
 
     def _draw_idle(self, p: QPainter) -> None:
-        s         = self._scale()
-        cx, cy    = self._cx(), self._cy()
-        r         = max(2, round(3 * s))
-        spacing   = round(11 * s)
-        amplitude = 4 * s
+        s       = self._scale()
+        cx, cy  = self._cx(), self._cy()
+        r       = max(1, round(2 * s))   # smaller than before
+        spacing = round(11 * s)
 
+        p.setPen(Qt.PenStyle.NoPen)
+
+        # Wave travels left→right: dot i peaks when phase = i × 2π/3.
+        # Alpha sweeps from dim (50) to full (TEXT_ALPHA) as the wave passes.
+        for i in range(3):
+            wave  = 0.5 * (1.0 + math.cos(self._idle_phase - i * (2.0 * math.pi / 3.0)))
+            alpha = int(50 + (TEXT_ALPHA - 50) * wave)
+            color = QColor(COLOR_ORANGE)
+            color.setAlpha(alpha)
+            p.setBrush(QBrush(color))
+            p.drawEllipse(QPoint(cx + (i - 1) * spacing, cy), r, r)
+
+    def _draw_approach_planet(self, p: QPainter) -> None:
+        """Shown when a target is set but the player has no GPS (not near/on planet)."""
+        s     = self._scale()
         color = QColor(COLOR_ORANGE)
         color.setAlpha(TEXT_ALPHA)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(color))
-
-        for i in range(3):
-            phase = self._idle_phase + i * (2 * math.pi / 3)
-            x = cx + (i - 1) * spacing
-            y = cy - round(amplitude * math.sin(phase))
-            p.drawEllipse(QPoint(x, y), r, r)
+        p.setPen(QPen(color))
+        font = QFont(FONT_FAMILY, max(7, round(10 * s)))
+        p.setFont(font)
+        p.drawText(
+            QRectF(4, 0, self.width() - 8, self.height()),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+            | Qt.TextFlag.TextWordWrap,
+            "APPROACH\nTHE PLANET",
+        )
 
     def _draw_move_mode(self, p: QPainter) -> None:
         w, h = self.width(), self.height()

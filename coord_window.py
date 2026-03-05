@@ -183,15 +183,6 @@ class CoordWindow(QWidget):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(8)
 
-        # Title
-        title = QLabel("SET TARGET")
-        title.setFont(QFont(_FONT, _SZ_TITLE, QFont.Weight.Bold))
-        title.setStyleSheet(
-            f"color: {_COL_ACTIVE};"
-            f" letter-spacing: 3px;"
-        )
-        layout.addWidget(title)
-
         # Selected body display — shown at top once user picks a body.
         # Styled as a plain label but is a button so it stays clickable
         # (click to reopen the menu and pick a different target).

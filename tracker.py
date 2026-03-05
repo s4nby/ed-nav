@@ -76,7 +76,7 @@ class PlayerState:
     """Snapshot of one Status.json read."""
     __slots__ = ("latitude", "longitude", "heading", "altitude",
                  "has_lat_long", "in_srv", "valid", "flags", "timestamp_utc",
-                 "body_name", "planet_radius_m")
+                 "body_name", "planet_radius_m", "speed_ms")
 
     def __init__(self):
         self.latitude:      Optional[float]            = None
@@ -90,22 +90,29 @@ class PlayerState:
         self.timestamp_utc: Optional[datetime.datetime] = None
         self.body_name:     Optional[str]              = None
         self.planet_radius_m: Optional[float]          = None
+        self.speed_ms:      Optional[float]            = None
 
 
 class NavResult:
     """Computed navigation output for the current frame."""
     __slots__ = ("bearing_to_target", "relative_bearing",
                  "distance_m", "has_lat_long", "arrived",
-                 "body_name", "planet_radius_m")
+                 "body_name", "planet_radius_m",
+                 "altitude_m", "speed_ms", "vertical_speed_ms",
+                 "target_descent_angle_deg")
 
     def __init__(self):
-        self.bearing_to_target:  Optional[float] = None
-        self.relative_bearing:   Optional[float] = None
-        self.distance_m:         Optional[float] = None
-        self.has_lat_long:       bool = False
-        self.arrived:            bool = False
-        self.body_name:          Optional[str]   = None
-        self.planet_radius_m:    Optional[float] = None
+        self.bearing_to_target:       Optional[float] = None
+        self.relative_bearing:        Optional[float] = None
+        self.distance_m:              Optional[float] = None
+        self.has_lat_long:            bool = False
+        self.arrived:                 bool = False
+        self.body_name:               Optional[str]   = None
+        self.planet_radius_m:         Optional[float] = None
+        self.altitude_m:              Optional[float] = None
+        self.speed_ms:                Optional[float] = None
+        self.vertical_speed_ms:       Optional[float] = None
+        self.target_descent_angle_deg: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +208,10 @@ def _parse_status(path: str) -> PlayerState:
         if raw_radius is not None:
             state.planet_radius_m = float(raw_radius)
 
+        raw_speed = data.get("Speed")
+        if raw_speed is not None:
+            state.speed_ms = float(raw_speed)
+
         raw_ts = data.get("timestamp")
         if raw_ts:
             try:
@@ -241,6 +252,7 @@ class GameTracker:
         self._thread: Optional[threading.Thread] = None
         self._running: bool = False
         self._ed_running: bool = False
+        self._vertical_speed_ms: Optional[float] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -302,6 +314,7 @@ class GameTracker:
             target_lat = self._target_lat
             target_lon = self._target_lon
             radius = self._planet_radius_m
+            vertical_speed_ms = self._vertical_speed_ms
 
         result.has_lat_long   = player.has_lat_long
         result.body_name      = player.body_name
@@ -330,6 +343,15 @@ class GameTracker:
         result.distance_m        = distance
         result.arrived           = distance < ARRIVAL_DISTANCE_M
 
+        # Descent guidance data
+        result.altitude_m        = player.altitude
+        result.speed_ms          = player.speed_ms
+        result.vertical_speed_ms = vertical_speed_ms
+        if player.altitude is not None and player.altitude > 0 and distance > 0:
+            result.target_descent_angle_deg = math.degrees(
+                math.atan2(player.altitude, distance)
+            )
+
         return result
 
     # ------------------------------------------------------------------
@@ -340,13 +362,42 @@ class GameTracker:
         interval_s = POLL_INTERVAL_MS / 1000.0
         poll_count = 0
         ed_running = _is_ed_running()  # check immediately on start
+
+        # Local-only variables for vertical speed tracking (no lock needed)
+        prev_altitude:   Optional[float] = None
+        prev_alt_time:   Optional[float] = None
+        smoothed_vspeed: Optional[float] = None
+
         while self._running:
             state = _parse_status(STATUS_JSON_PATH)
             poll_count += 1
             if poll_count >= 30:        # re-check process every ~3 s
                 poll_count = 0
                 ed_running = _is_ed_running()
+
+            # Compute vertical speed from altitude delta
+            vspeed: Optional[float] = None
+            now = time.monotonic()
+            if state.has_lat_long and state.altitude is not None:
+                if prev_altitude is not None and prev_alt_time is not None:
+                    dt = now - prev_alt_time
+                    if dt > 0.0:
+                        raw = (state.altitude - prev_altitude) / dt
+                        # Smooth with exponential low-pass to reduce noise
+                        if smoothed_vspeed is not None:
+                            smoothed_vspeed = 0.6 * smoothed_vspeed + 0.4 * raw
+                        else:
+                            smoothed_vspeed = raw
+                        vspeed = smoothed_vspeed
+                prev_altitude = state.altitude
+                prev_alt_time = now
+            else:
+                prev_altitude = None
+                prev_alt_time = None
+                smoothed_vspeed = None
+
             with self._lock:
-                self._player     = state
-                self._ed_running = ed_running
+                self._player            = state
+                self._ed_running        = ed_running
+                self._vertical_speed_ms = vspeed
             time.sleep(interval_s)
