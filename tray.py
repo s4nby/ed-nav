@@ -15,10 +15,11 @@ from constants import COLOR_ORANGE
 class TrayIcon(QSystemTrayIcon):
     """System tray icon with context menu for overlay control."""
 
-    toggle_overlay = pyqtSignal()
-    move_overlay   = pyqtSignal()
-    open_settings  = pyqtSignal()
-    quit_app       = pyqtSignal()
+    toggle_overlay  = pyqtSignal()
+    move_overlay    = pyqtSignal()
+    open_settings   = pyqtSignal()
+    toggle_settings = pyqtSignal()
+    quit_app        = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,6 +72,8 @@ class TrayIcon(QSystemTrayIcon):
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.toggle_overlay.emit()
+        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.toggle_settings.emit()
 
     # ------------------------------------------------------------------
     # Icon construction

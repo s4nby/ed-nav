@@ -280,6 +280,7 @@ class CoordWindow(QWidget):
         self._clear_btn.clicked.connect(self._on_clear)
         self._move_btn.clicked.connect(self.move_overlay)
         self._toggle_btn.clicked.connect(self.toggle_overlay)
+        self._toggle_btn.setToolTip("Shortcut: Ctrl+Shift+N")
 
         for btn in (self._set_btn, self._clear_btn, self._move_btn, self._toggle_btn):
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -389,8 +390,12 @@ class CoordWindow(QWidget):
             f"QMenu::item {{ padding: 4px 14px; }}"
             f"QMenu::item:selected {{ background: {_COL_LABEL}44; color: {_COL_ACTIVE}; }}"
         )
-        for body in sorted(self._bodies, key=lambda b: b.name):
-            label  = f"{body.name}   (planet radius: {body.radius_m / 1000:.0f} km)"
+        def _natural_key(b):
+            return [int(t) if t.isdigit() else t.lower()
+                    for t in re.split(r'(\d+)', b.name)]
+
+        for body in sorted(self._bodies, key=_natural_key):
+            label  = f"{body.name}   (Radius: {body.radius_m / 1000:.0f} km)"
             action = menu.addAction(label)
             action.setData(body)
 

@@ -137,6 +137,10 @@ def main():
     coord_window.move_overlay.connect(_toggle_move_mode)
     coord_window.toggle_overlay.connect(_toggle_overlay)
     tray.open_settings.connect(lambda: (coord_window.show(), coord_window.raise_()))
+    tray.toggle_settings.connect(
+        lambda: coord_window.hide() if coord_window.isVisible()
+        else (coord_window.show(), coord_window.raise_())
+    )
 
     coord_window.target_set.connect(
         lambda lat, lon, r: tracker.set_target(lat, lon, r)
@@ -152,6 +156,7 @@ def main():
     def push_nav():
         nav        = tracker.get_nav()
         has_target = tracker.has_target()
+        nav.vehicle_name = journal.get_vehicle_name()
         overlay.update_nav(nav, has_target)
         coord_window.update_status(nav, has_target)
         coord_window.update_bodies(journal.get_bodies(), journal.get_system(), journal.get_scan_required())

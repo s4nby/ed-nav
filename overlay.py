@@ -25,6 +25,7 @@ from constants import (
     MAX_ROTATE_PER_FRAME,
     PULSE_SPEED,
     ARRIVAL_DISTANCE_M,
+    PROXIMITY_DISTANCE_M, PROXIMITY_EXIT_M,
 )
 
 from tracker import NavResult, shortest_arc
@@ -37,6 +38,16 @@ _COLOR_BLUE = "#4499FF"
 
 _SPEED_SCALE_MAX = 80.0    # m/s at which the tail reaches maximum elongation
 _NEEDLE_SCALE    = 1.15    # needle geometry multiplier (slightly larger than base)
+
+# Heading deadzone — forbidden relative-bearing ranges (0–360° representation)
+# Global:          -60° to -90°  →  270° to 300°
+# Caspian Explorer: -75° to -90° →  270° to 285°
+_DZ_GLOBAL_LOW    = 270.0
+_DZ_GLOBAL_HIGH   = 300.0
+_DZ_CASPIAN_LOW   = 270.0
+_DZ_CASPIAN_HIGH  = 285.0
+_DZ_CASPIAN_NAME  = "caspian explorer"   # player-given ship name (case-insensitive)
+_DZ_HYSTERESIS    = 5.0    # degrees — must clear boundary by this much to exit deadzone
 
 
 # Win32 constants
@@ -74,6 +85,13 @@ class OverlayCanvas(QWidget):
         self._nav:        NavResult = NavResult()
         self._has_target: bool      = False
 
+        # Proximity state (< PROXIMITY_DISTANCE_M) — hysteresis prevents flicker
+        self._proximity_active: bool = False
+
+        # Heading deadzone — suppresses needle when target is in forbidden arc
+        self._in_deadzone:   bool = False
+        self._vehicle_name:  str  = ""
+
         self._move_mode:    bool             = False
         self._drag_start:   Optional[QPoint] = None
         self._resize_start: Optional[QPoint] = None
@@ -88,8 +106,9 @@ class OverlayCanvas(QWidget):
     # ------------------------------------------------------------------
 
     def update_nav(self, nav: NavResult, has_target: bool) -> None:
-        self._nav        = nav
-        self._has_target = has_target
+        self._nav          = nav
+        self._has_target   = has_target
+        self._vehicle_name = (nav.vehicle_name or "").strip().lower()
 
     def set_move_mode(self, active: bool) -> None:
         self._move_mode    = active
@@ -178,8 +197,37 @@ class OverlayCanvas(QWidget):
     def _tick(self) -> None:
         nav = self._nav
 
+        # ── Proximity state (hysteresis prevents flicker near 15 m) ───
+        # Based on raw distance — independent of nav.arrived (200 m threshold).
+        dist = nav.distance_m
+        if nav.has_lat_long and dist is not None:
+            if dist < PROXIMITY_DISTANCE_M:
+                self._proximity_active = True
+            elif self._proximity_active and dist > PROXIMITY_EXIT_M:
+                self._proximity_active = False
+        else:
+            self._proximity_active = False
+
+        # ── Heading deadzone ──────────────────────────────────────────
+        # Active whenever a bearing exists and the player is not already at the target.
+        if nav.relative_bearing is not None and not self._proximity_active:
+            rb = nav.relative_bearing
+            if self._vehicle_name == _DZ_CASPIAN_NAME:
+                dz_low, dz_high = _DZ_CASPIAN_LOW, _DZ_CASPIAN_HIGH
+            else:
+                dz_low, dz_high = _DZ_GLOBAL_LOW, _DZ_GLOBAL_HIGH
+            in_zone = dz_low <= rb <= dz_high
+            if in_zone:
+                self._in_deadzone = True
+            elif self._in_deadzone:
+                # Exit only when clearly outside the forbidden arc
+                if rb < dz_low - _DZ_HYSTERESIS or rb > dz_high + _DZ_HYSTERESIS:
+                    self._in_deadzone = False
+        else:
+            self._in_deadzone = False
+
         # ── Bearing tracking (clamped rate) ───────────────────────────
-        if nav.relative_bearing is not None and not nav.arrived:
+        if nav.relative_bearing is not None and not self._proximity_active and not self._in_deadzone:
             err  = shortest_arc(self._display_angle, nav.relative_bearing)
             step = max(-MAX_ROTATE_PER_FRAME, min(MAX_ROTATE_PER_FRAME, err))
             self._display_angle = (self._display_angle + step) % 360.0
@@ -212,9 +260,9 @@ class OverlayCanvas(QWidget):
         self._speed_scale = 1.0 + min(1.0, spd / _SPEED_SCALE_MAX) * 0.55
 
         # ── Misc ──────────────────────────────────────────────────────
-        if nav.arrived:
+        if self._proximity_active:
             self._pulse_phase += PULSE_SPEED
-        if not self._has_target and not nav.arrived:
+        if not self._has_target and not self._proximity_active:
             self._idle_phase += 0.2094  # 2π / (1.0 s × 30 FPS) → 1 s left-to-right sweep
         self.update()
 
@@ -256,8 +304,12 @@ class OverlayCanvas(QWidget):
         else:
             self._gps_lost_frames = 0
 
-        if nav.arrived:
-            self._draw_arrived(p, nav.distance_m)
+        if self._proximity_active:
+            # Within 15 m: glowing circle only — no needle, no distance label
+            self._draw_arrived(p, None)
+        elif self._in_deadzone:
+            # Target bearing is in forbidden arc — show distance only, no needle
+            self._draw_distance(p, nav.distance_m)
         else:
             needle_color = self._bearing_color(nav.relative_bearing)
             self._draw_needle(p, self._display_angle, needle_color)
@@ -366,7 +418,15 @@ class OverlayCanvas(QWidget):
         if angle is None or nav.altitude_m is None or nav.altitude_m < 50.0:
             return
 
-        angle = max(-60.0, min(90.0, angle))
+        # Descent-angle deadzone: angle is always positive here (0°–90°).
+        # The spec's "-60° to -90°" restricted range maps to > 60° in positive
+        # descent convention. For Caspian Explorer the limit shifts to 75°.
+        # When the required approach is steeper than the limit, suppress the panel.
+        dz_angle_limit = 75.0 if self._vehicle_name == _DZ_CASPIAN_NAME else 60.0
+        if angle >= dz_angle_limit:
+            return
+
+        angle = min(angle, dz_angle_limit)
 
         s  = self._scale()
         ns = s * _NEEDLE_SCALE

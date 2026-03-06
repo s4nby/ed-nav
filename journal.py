@@ -42,6 +42,7 @@ class JournalWatcher:
         self._system:             str = ""
         self._scan_required:      bool = False
         self._last_session_system = last_session_system
+        self._vehicle_name:       str = ""
         self._thread:             Optional[threading.Thread] = None
         self._running             = False
 
@@ -72,6 +73,10 @@ class JournalWatcher:
     def get_scan_required(self) -> bool:
         with self._lock:
             return self._scan_required
+
+    def get_vehicle_name(self) -> str:
+        with self._lock:
+            return self._vehicle_name
 
     # ------------------------------------------------------------------
     # Background loop
@@ -144,6 +149,11 @@ class JournalWatcher:
                 with self._lock:
                     if self._bodies:
                         self._scan_required = False
+
+        elif kind == "Loadout":
+            name = ev.get("ShipName", "")
+            with self._lock:
+                self._vehicle_name = name
 
         elif kind == "Scan" and ev.get("Landable"):
             name   = ev.get("BodyName", "")

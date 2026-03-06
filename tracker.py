@@ -99,7 +99,7 @@ class NavResult:
                  "distance_m", "has_lat_long", "arrived",
                  "body_name", "planet_radius_m",
                  "altitude_m", "speed_ms", "vertical_speed_ms",
-                 "target_descent_angle_deg")
+                 "target_descent_angle_deg", "vehicle_name")
 
     def __init__(self):
         self.bearing_to_target:       Optional[float] = None
@@ -113,6 +113,7 @@ class NavResult:
         self.speed_ms:                Optional[float] = None
         self.vertical_speed_ms:       Optional[float] = None
         self.target_descent_angle_deg: Optional[float] = None
+        self.vehicle_name:            Optional[str]   = None
 
 
 # ---------------------------------------------------------------------------

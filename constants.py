@@ -62,7 +62,9 @@ PULSE_SPEED          = 0.08                 # arrival pulse (radians/frame)
 # ---------------------------------------------------------------------------
 # Arrival threshold
 # ---------------------------------------------------------------------------
-ARRIVAL_DISTANCE_M = 200   # metres
+ARRIVAL_DISTANCE_M   = 200   # metres — glowing circle + distance label
+PROXIMITY_DISTANCE_M = 15    # metres — glowing circle only (no needle/distance)
+PROXIMITY_EXIT_M     = 20    # metres — hysteresis: exit proximity state above this
 
 # ---------------------------------------------------------------------------
 # Planet default radius (metres)
