@@ -381,12 +381,17 @@ class CoordWindow(QWidget):
             f"QMenu::item:selected {{ background: {_COL_LABEL}44; color: {_COL_ACTIVE}; }}"
         )
         for body in sorted(self._bodies, key=lambda b: b.name):
-            label  = f"{body.name}   ({body.radius_m / 1000:.0f} km)"
+            label  = f"{body.name}   (planet radius: {body.radius_m / 1000:.0f} km)"
             action = menu.addAction(label)
             action.setData(body)
 
-        menu.setMinimumWidth(self._body_btn.width())
-        pos    = self._body_btn.mapToGlobal(self._body_btn.rect().bottomLeft())
+        trigger = self.sender() if isinstance(self.sender(), QPushButton) else self._body_btn
+        menu.setMinimumWidth(trigger.width())
+        menu.adjustSize()
+        x   = trigger.mapToGlobal(trigger.rect().bottomLeft()).x()
+        x  += (trigger.width() - menu.sizeHint().width()) // 2
+        pos = trigger.mapToGlobal(trigger.rect().bottomLeft())
+        pos.setX(x)
         chosen = menu.exec(pos)
         if chosen:
             body = chosen.data()
