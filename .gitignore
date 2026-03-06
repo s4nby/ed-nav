@@ -13,3 +13,9 @@ dist/
 .idea/
 Thumbs.db
 Desktop.ini
+
+# Claude Code session data
+.claude/
+
+# Misc
+*.pdf
