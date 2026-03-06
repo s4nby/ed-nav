@@ -473,7 +473,7 @@ class OverlayCanvas(QWidget):
     def _draw_idle(self, p: QPainter) -> None:
         s       = self._scale()
         cx, cy  = self._cx(), self._cy()
-        r       = max(1, round(2 * s))   # smaller than before
+        r       = max(2, round(3 * s))
         spacing = round(11 * s)
 
         p.setPen(Qt.PenStyle.NoPen)

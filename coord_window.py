@@ -11,7 +11,7 @@
 import re
 from typing import Optional
 
-from PyQt6.QtCore    import Qt, pyqtSignal
+from PyQt6.QtCore    import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui     import QFont
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
@@ -22,6 +22,7 @@ from constants import (
     COLOR_ERROR, COLOR_ORANGE,
     DEFAULT_PLANET_RADIUS_M,
     FONT_FAMILY,
+    VERSION,
 )
 
 # ---------------------------------------------------------------------------
@@ -98,6 +99,7 @@ class CoordWindow(QWidget):
         self._bodies:        list[LandableBody] = []
         self._selected_body: LandableBody | None = None
         self._last_system:   str = ""
+        self._menu_open:     bool = False
 
         self._build_ui()
         self.setMinimumWidth(320)
@@ -290,6 +292,12 @@ class CoordWindow(QWidget):
         btn_grid.addWidget(self._toggle_btn, 1, 1)
         layout.addLayout(btn_grid)
 
+        version_label = QLabel(f"v{VERSION}")
+        version_label.setFont(QFont(_FONT, 8))
+        version_label.setStyleSheet(f"color: {_COL_DIM};")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(version_label)
+
     # ------------------------------------------------------------------
     # Event filter — Ctrl+V paste intercept on lat field
     # ------------------------------------------------------------------
@@ -370,8 +378,9 @@ class CoordWindow(QWidget):
         self._error_label.setText("")
 
     def _show_body_menu(self) -> None:
-        if not self._bodies:
+        if not self._bodies or self._menu_open:
             return
+        self._menu_open = True
         menu = QMenu(self)
         menu.setStyleSheet(
             f"QMenu {{ background: #0f0f0f; color: {_COL_ACTIVE};"
@@ -393,6 +402,7 @@ class CoordWindow(QWidget):
         pos = trigger.mapToGlobal(trigger.rect().bottomLeft())
         pos.setX(x)
         chosen = menu.exec(pos)
+        QTimer.singleShot(200, lambda: setattr(self, '_menu_open', False))
         if chosen:
             body = chosen.data()
             self._selected_body  = body
