@@ -8,11 +8,12 @@
 #
 # Closing the window hides it instead of destroying it (preserves state).
 
+import ctypes
 import re
 from typing import Optional
 
-from PyQt6.QtCore    import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui     import QFont
+from PyQt6.QtCore    import QEvent, QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui     import QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QMenu, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
@@ -45,10 +46,39 @@ _COL_DIM     = "#7A3D00"   # dim    — hints, inactive text
 _COL_INPUT_BG = "#0f0f0f"  # input background
 _COL_BORDER  = "#FF8C0055" # subtle orange border
 
-FONT_SIZE_PANEL = 10   # kept so nothing else in the file breaks
-
 from tracker import NavResult
 from journal import LandableBody
+from planet_preview import PlanetPreviewWidget
+
+# ---------------------------------------------------------------------------
+# Eliding button — QPushButton that truncates its label with '...' on resize
+# ---------------------------------------------------------------------------
+
+class _ElidedButton(QPushButton):
+    """QPushButton that elides its label to fit the available width."""
+
+    _H_PAD = 36   # total horizontal padding (18px × 2 from stylesheet)
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full_text = text
+        super().setText(text)
+
+    def setText(self, text: str) -> None:
+        self._full_text = text
+        self._refresh()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        available = max(0, self.width() - self._H_PAD)
+        elided = QFontMetrics(self.font()).elidedText(
+            self._full_text, Qt.TextElideMode.ElideRight, available
+        )
+        super().setText(elided)
+
 
 # ---------------------------------------------------------------------------
 # Paste-parsing regexes (same logic as the old settings_panel.py)
@@ -102,9 +132,7 @@ class CoordWindow(QWidget):
         self._menu_open:     bool = False
 
         self._build_ui()
-        self.setMinimumWidth(320)
-        self.adjustSize()
-        self.setMaximumSize(self.width() * 2, self.height() * 2)
+        self.setFixedSize(420, 630)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -117,7 +145,6 @@ class CoordWindow(QWidget):
 
     def _remove_maximize_button(self) -> None:
         try:
-            import ctypes
             GWL_STYLE     = -16
             WS_MAXIMIZEBOX = 0x00010000
             hwnd  = int(self.winId())
@@ -162,19 +189,27 @@ class CoordWindow(QWidget):
             self._selected_body  = None
             self._radius_m       = 0.0
 
-        # Always keep the button count in sync with the live body list
+        # Sync count label and list-button state
+        _FSS_TIP = (
+            "FSS scan the desired planet, or approach within at least "
+            "30 LS of it to be detected."
+        )
         n = len(bodies)
         if n:
-            self._body_btn.setText(
-                f"{n} landable bod{'y' if n == 1 else 'ies'} detected"
-            )
-            self._body_btn.setEnabled(True)
+            self._body_count_label.setText(f"Landable Bodies Detected: {n}")
+            self._planet_name_label.setEnabled(True)
+            self._planet_name_label.setToolTip("")
+            self._body_count_label.setToolTip("")
         elif scan_required:
-            self._body_btn.setText("Scan required")
-            self._body_btn.setEnabled(False)
+            self._body_count_label.setText("Scan Required")
+            self._planet_name_label.setEnabled(False)
+            self._planet_name_label.setToolTip(_FSS_TIP)
+            self._body_count_label.setToolTip(_FSS_TIP)
         else:
-            self._body_btn.setText("0 landable bodies detected")
-            self._body_btn.setEnabled(False)
+            self._body_count_label.setText("Landable Bodies Detected: 0")
+            self._planet_name_label.setEnabled(False)
+            self._planet_name_label.setToolTip(_FSS_TIP)
+            self._body_count_label.setToolTip(_FSS_TIP)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -185,42 +220,59 @@ class CoordWindow(QWidget):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(8)
 
-        # Selected body display — shown at top once user picks a body.
-        # Styled as a plain label but is a button so it stays clickable
-        # (click to reopen the menu and pick a different target).
-        self._selected_label = QPushButton("")
-        self._selected_label.setFont(QFont(_FONT, _SZ_LABEL, QFont.Weight.Bold))
-        self._selected_label.setStyleSheet(
-            f"QPushButton {{ color: {_COL_ACTIVE}; background: transparent;"
-            f" border: none; padding: 0; letter-spacing: 1px; }}"
-            f"QPushButton:hover {{ color: #FFAA33; }}"
+        # Three-column header: [list button] | [planet name] | [body count]
+        _flat_btn_ss = (
+            f"QPushButton {{ background: transparent; color: {_COL_DIM};"
+            f" border: none; padding: 2px 4px;"
+            f" font-family: '{_FONT}'; font-size: {_SZ_LABEL}pt;"
+            f" font-weight: bold; letter-spacing: 1px; }}"
+            f"QPushButton:hover {{ color: {_COL_ACTIVE}; }}"
+            f"QPushButton:disabled {{ color: #3D1E00; }}"
         )
-        self._selected_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._selected_label.clicked.connect(self._show_body_menu)
-        self._selected_label.hide()
-        layout.addWidget(self._selected_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        # Landable bodies button — centred, directly below title
-        self._body_btn = self._make_button("0 landable bodies detected")
-        self._body_btn.setEnabled(False)
-        self._body_btn.clicked.connect(self._show_body_menu)
-        layout.addWidget(self._body_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        # Body / radius info (updated when body is selected or player is on surface)
-        self._body_label = QLabel(
-            "FSS scan the desired planet, or approach within at least "
-            "30 LS of it to be detected."
+        _flat_lbl_ss = (
+            f"QLabel {{ background: transparent; border: none; }}"
         )
-        self._body_label.setFont(QFont(_FONT, _SZ_HINT))
-        self._body_label.setStyleSheet(f"color: {_COL_DIM};")
-        self._body_label.setWordWrap(True)
-        layout.addWidget(self._body_label)
+
+        self._planet_name_label = _ElidedButton("Select a Planet")
+        self._planet_name_label.setFont(QFont(_FONT, _SZ_BTN, QFont.Weight.Bold))
+        self._planet_name_label.setStyleSheet(
+            f"QPushButton {{ background: #1a1a1a; color: {_COL_ACTIVE};"
+            f" border: 1px solid {_COL_LABEL}; border-radius: 2px;"
+            f" padding: 6px 18px; letter-spacing: 1px; }}"
+            f"QPushButton:hover {{ border-color: {_COL_ACTIVE}; background: #2a2a2a; }}"
+            f"QPushButton:pressed {{ background: #994400; }}"
+            f"QPushButton:disabled {{ color: {_COL_DIM}; border-color: {_COL_DIM}; }}"
+        )
+        self._planet_name_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._planet_name_label.setEnabled(False)
+        self._planet_name_label.clicked.connect(self._show_body_menu)
+
+        self._body_count_label = QLabel("Landable Bodies Detected: 0")
+        self._body_count_label.setFont(QFont(_FONT, _SZ_LABEL))
+        self._body_count_label.setStyleSheet(
+            f"QLabel {{ background: transparent; border: none; color: {_COL_DIM}; }}"
+        )
+        self._body_count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(6)
+        header_row.addWidget(self._planet_name_label, 1)
+        header_row.addSpacing(10)
+        header_row.addWidget(self._body_count_label)
+        layout.addLayout(header_row)
+
+
+        # 3D planet preview — hidden until a body is selected
+        self._planet_preview = PlanetPreviewWidget()
+        self._planet_preview.coord_picked.connect(self._on_coord_picked)
+        layout.addWidget(self._planet_preview, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # Divider
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setStyleSheet(
-            f"border: none; border-top: 1px solid {COLOR_ORANGE}44;"
+            f"border: none; border-top: 1px solid {_COL_ACTIVE};"
         )
         layout.addWidget(line)
 
@@ -241,6 +293,7 @@ class CoordWindow(QWidget):
 
         self._lat_input = self._make_line_edit("e.g.  −22.4500")
         self._lat_input.textChanged.connect(self._clear_error)
+        self._lat_input.textChanged.connect(self._update_preview_marker)
         self._lat_input.installEventFilter(self)
         layout.addWidget(self._lat_input)
 
@@ -252,6 +305,7 @@ class CoordWindow(QWidget):
 
         self._lon_input = self._make_line_edit("e.g.  137.8800")
         self._lon_input.textChanged.connect(self._clear_error)
+        self._lon_input.textChanged.connect(self._update_preview_marker)
         layout.addWidget(self._lon_input)
 
 
@@ -293,6 +347,8 @@ class CoordWindow(QWidget):
         btn_grid.addWidget(self._toggle_btn, 1, 1)
         layout.addLayout(btn_grid)
 
+        layout.addStretch(1)
+
         version_label = QLabel(f"v{VERSION}")
         version_label.setFont(QFont(_FONT, 8))
         version_label.setStyleSheet(f"color: {_COL_DIM};")
@@ -304,8 +360,6 @@ class CoordWindow(QWidget):
     # ------------------------------------------------------------------
 
     def eventFilter(self, obj, event):
-        from PyQt6.QtCore import QEvent
-
         if obj is self._lat_input and event.type() == QEvent.Type.KeyPress:
             ke = event
             if (ke.key() == Qt.Key.Key_V
@@ -368,7 +422,42 @@ class CoordWindow(QWidget):
         self._lon_input.clear()
         self._body_name_input.clear()
         self._clear_error()
+        self._planet_preview.set_target(None, None)
         self.target_cleared.emit()
+
+    def _on_coord_picked(self, lat: float, lon: float) -> None:
+        self._lat_input.setText(str(lat))
+        self._lon_input.setText(str(lon))
+
+    def _update_preview_marker(self) -> None:
+        if not self._planet_preview.is_active:
+            return
+        lat = self._try_parse_float(self._lat_input.text())
+        lon = self._try_parse_float(self._lon_input.text())
+        self._planet_preview.set_target(lat, lon)
+
+    def _fit_to_header(self) -> None:
+        """Resize window width to exactly fit the header row, snapping instantly."""
+        m = self.layout().contentsMargins()
+        h_margins = m.left() + m.right()
+
+        name_w  = QFontMetrics(self._planet_name_label.font()).horizontalAdvance(
+            self._planet_name_label.text()
+        ) + 16   # button horizontal padding (2×4px stylesheet + 4px buffer)
+        count_w = QFontMetrics(self._body_count_label.font()).horizontalAdvance(
+            self._body_count_label.text()
+        ) + 8
+
+        target_w = max(self.minimumWidth(), name_w + count_w + h_margins + 6)
+        if target_w != self.width():
+            self.resize(target_w, self.height())
+
+    @staticmethod
+    def _try_parse_float(text: str) -> float | None:
+        try:
+            return float(text.strip())
+        except ValueError:
+            return None
 
     def _show_error(self, msg: str) -> None:
         self._error_label.setText(msg)
@@ -383,13 +472,7 @@ class CoordWindow(QWidget):
             return
         self._menu_open = True
         menu = QMenu(self)
-        menu.setStyleSheet(
-            f"QMenu {{ background: #0f0f0f; color: {_COL_ACTIVE};"
-            f" font-family: '{_FONT}'; font-size: {_SZ_LABEL}pt;"
-            f" border: 1px solid {_COL_LABEL}; }}"
-            f"QMenu::item {{ padding: 4px 14px; }}"
-            f"QMenu::item:selected {{ background: {_COL_LABEL}44; color: {_COL_ACTIVE}; }}"
-        )
+
         def _natural_key(b):
             return [int(t) if t.isdigit() else t.lower()
                     for t in re.split(r'(\d+)', b.name)]
@@ -399,13 +482,50 @@ class CoordWindow(QWidget):
             action = menu.addAction(label)
             action.setData(body)
 
-        trigger = self.sender() if isinstance(self.sender(), QPushButton) else self._body_btn
+        # Dynamic font scaling: shrink until menu fits within the window bounds
+        win_tl = self.mapToGlobal(QPoint(0, 0))
+        win_w  = self.width()
+        win_h  = self.height()
+
+        font_size = _SZ_LABEL
+        _MIN_FONT = 7
+        while font_size >= _MIN_FONT:
+            menu.setStyleSheet(
+                f"QMenu {{ background: #0a0a0a; color: {_COL_ACTIVE};"
+                f" font-family: '{_FONT}'; font-size: {font_size}pt;"
+                f" font-weight: bold; letter-spacing: 1px;"
+                f" border: 1px solid {_COL_LABEL}; border-radius: 4px; }}"
+                f"QMenu::item {{ padding: 6px 16px; border-radius: 2px;"
+                f" margin: 1px 4px; }}"
+                f"QMenu::item:selected {{ background: #2a2a2a;"
+                f" border: 1px solid {_COL_LABEL}; color: {_COL_ACTIVE}; }}"
+                f"QMenu::separator {{ height: 1px; background: {_COL_LABEL};"
+                f" margin: 3px 8px; }}"
+            )
+            menu.adjustSize()
+            hint = menu.sizeHint()
+            if hint.width() <= win_w and hint.height() <= win_h:
+                break
+            font_size -= 1
+
+        trigger = self._planet_name_label
         menu.setMinimumWidth(trigger.width())
         menu.adjustSize()
+        hint = menu.sizeHint()
+
+        # Centre the menu under the trigger, then clamp to window edges
         x   = trigger.mapToGlobal(trigger.rect().bottomLeft()).x()
-        x  += (trigger.width() - menu.sizeHint().width()) // 2
+        x  += (trigger.width() - hint.width()) // 2
         pos = trigger.mapToGlobal(trigger.rect().bottomLeft())
         pos.setX(x)
+
+        win_right  = win_tl.x() + win_w
+        win_bottom = win_tl.y() + win_h
+        clamped_x = max(win_tl.x(), min(pos.x(), win_right  - hint.width()))
+        clamped_y = max(win_tl.y(), min(pos.y(), win_bottom - hint.height()))
+        pos.setX(clamped_x)
+        pos.setY(clamped_y)
+
         chosen = menu.exec(pos)
         QTimer.singleShot(200, lambda: setattr(self, '_menu_open', False))
         if chosen:
@@ -413,6 +533,14 @@ class CoordWindow(QWidget):
             self._selected_body  = body
             self._radius_m       = body.radius_m
             self._body_name_input.setText(body.name)
+            self._planet_name_label.setText(body.name)
+
+            # Activate / orient the 3D preview
+            lat = self._try_parse_float(self._lat_input.text())
+            lon = self._try_parse_float(self._lon_input.text())
+            self._planet_preview.reset_rotation(lat or 0.0, lon or 0.0)
+            self._planet_preview.set_target(lat, lon)
+            self._planet_preview.set_active(True)
 
     # ------------------------------------------------------------------
     # Widget factories

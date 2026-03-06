@@ -19,6 +19,7 @@ from constants import (
     STATUS_JSON_PATH,
     POLL_INTERVAL_MS,
     DEFAULT_PLANET_RADIUS_M,
+    ARRIVAL_DISTANCE_M,
 )
 
 # ---------------------------------------------------------------------------
@@ -338,7 +339,6 @@ class GameTracker:
         distance = compute_distance_m(lat1, lon1, target_lat, target_lon, radius)
         rel_brg  = relative_bearing(bearing, hdg)
 
-        from constants import ARRIVAL_DISTANCE_M
         result.bearing_to_target = bearing
         result.relative_bearing  = rel_brg
         result.distance_m        = distance

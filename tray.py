@@ -70,9 +70,7 @@ class TrayIcon(QSystemTrayIcon):
     # ------------------------------------------------------------------
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self.toggle_overlay.emit()
-        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.toggle_settings.emit()
 
     # ------------------------------------------------------------------
