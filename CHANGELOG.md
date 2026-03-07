@@ -5,7 +5,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.0.10] — Unreleased heading to [1.1.0] — 2026-03-06
+## [1.1.1] Released — 2026-03-07
 
 ### Added
 - 3D interactive planet preview in the settings window — drag to rotate, click to set coordinates

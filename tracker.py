@@ -25,8 +25,9 @@ from constants import (
 # ---------------------------------------------------------------------------
 # Status.json flag bits
 # ---------------------------------------------------------------------------
-FLAG_HAS_LAT_LONG = 0x200000    # bit 21 — HasLatLong (lat/lon present in Status.json)
-FLAG_IN_SRV       = 0x4000000   # bit 26 — InSrv (player is in Surface Rover Vehicle)
+FLAG_HAS_LAT_LONG              = 0x200000    # bit 21 — HasLatLong (lat/lon present in Status.json)
+FLAG_IN_SRV                    = 0x4000000   # bit 26 — InSrv (player is in Surface Rover Vehicle)
+FLAG_ALTITUDE_FROM_AVG_RADIUS  = 0x20000000  # bit 29 — AltitudeFromAverageRadius (orbital flight active)
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +101,8 @@ class NavResult:
                  "distance_m", "has_lat_long", "arrived",
                  "body_name", "planet_radius_m",
                  "altitude_m", "speed_ms", "vertical_speed_ms",
-                 "target_descent_angle_deg", "vehicle_name")
+                 "target_descent_angle_deg", "vehicle_name",
+                 "in_orbital_flight")
 
     def __init__(self):
         self.bearing_to_target:       Optional[float] = None
@@ -115,6 +117,7 @@ class NavResult:
         self.vertical_speed_ms:       Optional[float] = None
         self.target_descent_angle_deg: Optional[float] = None
         self.vehicle_name:            Optional[str]   = None
+        self.in_orbital_flight:       bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -318,9 +321,10 @@ class GameTracker:
             radius = self._planet_radius_m
             vertical_speed_ms = self._vertical_speed_ms
 
-        result.has_lat_long   = player.has_lat_long
-        result.body_name      = player.body_name
+        result.has_lat_long    = player.has_lat_long
+        result.body_name       = player.body_name
         result.planet_radius_m = player.planet_radius_m
+        result.in_orbital_flight = bool(player.flags & FLAG_ALTITUDE_FROM_AVG_RADIUS)
 
         if not player.has_lat_long or not player.valid:
             return result

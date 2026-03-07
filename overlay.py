@@ -26,6 +26,8 @@ from constants import (
     PULSE_SPEED,
     ARRIVAL_DISTANCE_M,
     PROXIMITY_DISTANCE_M, PROXIMITY_EXIT_M,
+    ORBITAL_ZONE_BUFFER_M,
+    DEFAULT_PLANET_RADIUS_M,
 )
 
 from tracker import NavResult, shortest_arc
@@ -81,6 +83,9 @@ class OverlayCanvas(QWidget):
 
         # GPS dropout grace period — absorbs brief has_lat_long flickers
         self._gps_lost_frames: int = 0
+        # Last known good nav values — used to keep drawing during grace period
+        self._last_valid_distance_m:  Optional[float] = None
+        self._last_valid_rel_bearing: Optional[float] = None
 
         self._nav:        NavResult = NavResult()
         self._has_target: bool      = False
@@ -232,6 +237,13 @@ class OverlayCanvas(QWidget):
             step = max(-MAX_ROTATE_PER_FRAME, min(MAX_ROTATE_PER_FRAME, err))
             self._display_angle = (self._display_angle + step) % 360.0
 
+        # Save last good nav values for GPS dropout grace rendering
+        if nav.has_lat_long:
+            if nav.distance_m is not None:
+                self._last_valid_distance_m = nav.distance_m
+            if nav.relative_bearing is not None:
+                self._last_valid_rel_bearing = nav.relative_bearing
+
         # ── Flight-path angle from position deltas ────────────────────
         # Computed from altitude + distance changes between nav updates.
         # Only updates when the position actually changes (nav refresh rate
@@ -295,7 +307,13 @@ class OverlayCanvas(QWidget):
 
         if not nav.has_lat_long:
             self._gps_lost_frames += 1
-            if self._gps_lost_frames < 6:   # ~200 ms grace at 30 fps
+            if self._gps_lost_frames < 30:   # ~1 s grace at 30 fps
+                # Keep drawing the last known needle state so brief GPS flickers
+                # are invisible to the user rather than showing blank.
+                if self._has_target and self._last_valid_distance_m is not None:
+                    needle_color = self._bearing_color(self._last_valid_rel_bearing)
+                    self._draw_needle(p, self._display_angle, needle_color)
+                    self._draw_distance(p, self._last_valid_distance_m)
                 p.end()
                 return
             self._draw_approach_planet(p)
@@ -303,6 +321,18 @@ class OverlayCanvas(QWidget):
             return
         else:
             self._gps_lost_frames = 0
+
+        # ── Altitude-based activation gate ────────────────────────────────
+        # Show the needle only within 150 km of the orbital zone boundary.
+        # Orbital zone boundary ≈ 2 × planet_radius altitude above the surface
+        # (orbit is at 3× radius from the planet's centre).
+        if nav.altitude_m is not None:
+            planet_radius = nav.planet_radius_m or DEFAULT_PLANET_RADIUS_M
+            activation_alt_m = 2.0 * planet_radius + ORBITAL_ZONE_BUFFER_M
+            if nav.altitude_m > activation_alt_m:
+                self._draw_approach_planet(p)
+                p.end()
+                return
 
         if self._proximity_active:
             # Within 15 m: glowing circle only — no needle, no distance label
@@ -415,7 +445,7 @@ class OverlayCanvas(QWidget):
         Arrow hidden when on-target (within ±2° dead-band).
         """
         angle = nav.target_descent_angle_deg
-        if angle is None or nav.altitude_m is None or nav.altitude_m < 50.0:
+        if angle is None or nav.altitude_m is None or nav.altitude_m < 10.0:
             return
 
         # Descent-angle deadzone: angle is always positive here (0°–90°).
@@ -467,47 +497,62 @@ class OverlayCanvas(QWidget):
         start_x  = panel_left + (panel_w - unit_w) / 2.0
         arrow_cx = start_x + text_w + gap + aw
 
-        # Degree text — blue when on-target, orange otherwise
-        col = QColor(_COLOR_BLUE if on_target else COLOR_ORANGE)
-        col.setAlpha(TEXT_ALPHA)
-        p.setPen(QPen(col))
-        p.setFont(font)
-        p.drawText(
-            QRectF(start_x, mid - text_h / 2, text_w + 2, text_h),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            text_str,
-        )
+        # Degree text — only while orbital flight is active (AltitudeFromAverageRadius set)
+        if nav.in_orbital_flight:
+            col = QColor(_COLOR_BLUE if on_target else COLOR_ORANGE)
+            col.setAlpha(TEXT_ALPHA)
+            text_rect = QRectF(start_x, mid - text_h / 2, text_w + 2, text_h)
+            text_flags = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 
-        # Single directional arrow — hidden when on-target
-        if need_up or need_down:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(col))
-            arrow = QPainterPath()
-            if need_up:
-                arrow.moveTo(arrow_cx,      mid - ah / 2)
-                arrow.lineTo(arrow_cx - aw, mid + ah / 2)
-                arrow.lineTo(arrow_cx + aw, mid + ah / 2)
-            else:
-                arrow.moveTo(arrow_cx,      mid + ah / 2)
-                arrow.lineTo(arrow_cx - aw, mid - ah / 2)
-                arrow.lineTo(arrow_cx + aw, mid - ah / 2)
-            arrow.closeSubpath()
-            p.drawPath(arrow)
+            p.setFont(font)
+            shadow = QColor(0, 0, 0, 100)
+            p.setPen(QPen(shadow))
+            p.drawText(QRectF(text_rect.x() + 1, text_rect.y() + 1,
+                              text_rect.width(), text_rect.height()),
+                       text_flags, text_str)
+            p.setPen(QPen(col))
+            p.drawText(text_rect, text_flags, text_str)
+
+        # Inclination indicators — only when orbital flight is active and correction is required
+        if nav.in_orbital_flight and (need_up or need_down):
+            # Shadow
+            shadow_brush = QColor(0, 0, 0, 100)
+            off = 1
+            for brush_col, dx, dy in [(shadow_brush, off, off), (col, 0, 0)]:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QBrush(brush_col))
+                arrow = QPainterPath()
+                if need_up:
+                    arrow.moveTo(arrow_cx + dx,      mid - ah / 2 + dy)
+                    arrow.lineTo(arrow_cx - aw + dx, mid + ah / 2 + dy)
+                    arrow.lineTo(arrow_cx + aw + dx, mid + ah / 2 + dy)
+                else:
+                    arrow.moveTo(arrow_cx + dx,      mid + ah / 2 + dy)
+                    arrow.lineTo(arrow_cx - aw + dx, mid - ah / 2 + dy)
+                    arrow.lineTo(arrow_cx + aw + dx, mid - ah / 2 + dy)
+                arrow.closeSubpath()
+                p.drawPath(arrow)
 
     def _draw_distance(self, p: QPainter, distance_m: Optional[float]) -> None:
         if distance_m is None:
             return
         text = f"{distance_m / 1000.0:.1f} km" if distance_m >= 1000.0 else f"{int(distance_m)} m"
-        s    = self._scale()
+        s     = self._scale()
+        font  = QFont(FONT_FAMILY, max(6, round(FONT_SIZE_DIST * s)))
+        rect  = QRectF(0, self.height() - 16 * s, self.width(), 18 * s)
+        flags = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+
+        p.setFont(font)
+        # Drop shadow
+        shadow = QColor(0, 0, 0, 100)
+        p.setPen(QPen(shadow))
+        p.drawText(QRectF(rect.x() + 1, rect.y() + 1, rect.width(), rect.height()),
+                   flags, text)
+        # Main text
         color = QColor(COLOR_ORANGE)
         color.setAlpha(TEXT_ALPHA)
         p.setPen(QPen(color))
-        p.setFont(QFont(FONT_FAMILY, max(6, round(FONT_SIZE_DIST * s))))
-        p.drawText(
-            QRectF(0, self.height() - 15 * s, self.width(), 18 * s),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-            text,
-        )
+        p.drawText(rect, flags, text)
 
     def _draw_arrived(self, p: QPainter, distance_m: Optional[float]) -> None:
         s      = self._scale()
@@ -551,17 +596,21 @@ class OverlayCanvas(QWidget):
     def _draw_approach_planet(self, p: QPainter) -> None:
         """Shown when a target is set but the player has no GPS (not near/on planet)."""
         s     = self._scale()
+        font  = QFont(FONT_FAMILY, max(7, round(10 * s)))
+        rect  = QRectF(4, 0, self.width() - 8, self.height())
+        flags = (Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+                 | Qt.TextFlag.TextWordWrap)
+        msg   = "APPROACH\nTHE PLANET"
+
+        p.setFont(font)
+        shadow = QColor(0, 0, 0, 100)
+        p.setPen(QPen(shadow))
+        p.drawText(QRectF(rect.x() + 1, rect.y() + 1, rect.width(), rect.height()),
+                   flags, msg)
         color = QColor(COLOR_ORANGE)
         color.setAlpha(TEXT_ALPHA)
         p.setPen(QPen(color))
-        font = QFont(FONT_FAMILY, max(7, round(10 * s)))
-        p.setFont(font)
-        p.drawText(
-            QRectF(4, 0, self.width() - 8, self.height()),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
-            | Qt.TextFlag.TextWordWrap,
-            "APPROACH\nTHE PLANET",
-        )
+        p.drawText(rect, flags, msg)
 
     def _draw_move_mode(self, p: QPainter) -> None:
         w, h = self.width(), self.height()

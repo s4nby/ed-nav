@@ -6,7 +6,7 @@ import os
 # ---------------------------------------------------------------------------
 # App version & update feed
 # ---------------------------------------------------------------------------
-VERSION     = "1.1.0"
+VERSION     = "1.1.1"
 GITHUB_REPO = "s4nby/ed-nav"
 
 # ---------------------------------------------------------------------------
@@ -65,6 +65,14 @@ PULSE_SPEED          = 0.08                 # arrival pulse (radians/frame)
 ARRIVAL_DISTANCE_M   = 200   # metres — glowing circle + distance label
 PROXIMITY_DISTANCE_M = 15    # metres — glowing circle only (no needle/distance)
 PROXIMITY_EXIT_M     = 20    # metres — hysteresis: exit proximity state above this
+
+# ---------------------------------------------------------------------------
+# Orbital-zone activation threshold
+# ---------------------------------------------------------------------------
+# Orbital zone boundary ≈ 2 × planet_radius altitude above surface
+# (orbit at 3× radius from centre = 2× from surface).
+# Needle initialises this far before entering the orbital zone.
+ORBITAL_ZONE_BUFFER_M = 500_000   # 500 km
 
 # ---------------------------------------------------------------------------
 # Planet default radius (metres)
