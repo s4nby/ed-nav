@@ -28,9 +28,11 @@ jobs:
 
       - name: Compute SHA256 checksum
         run: |
-          $hash = (Get-FileHash dist\EDNavigator.exe -Algorithm SHA256).Hash
-          $version = "${{ github.event.release.tag_name }}"
-          "EDNavigator.exe  $hash" | Out-File -FilePath dist\EDNavigator.exe.sha256.txt -Encoding utf8
+          $tag = "${{ github.event.release.tag_name }}"
+          $version = $tag.TrimStart("v")
+          $exe = "dist\ed_navigator_v$version.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash
+          "$exe  $hash" | Out-File -FilePath "dist\ed_navigator_v$version.exe.sha256.txt" -Encoding utf8
           Write-Output "SHA256: $hash"
         shell: pwsh
 
@@ -38,5 +40,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/EDNavigator.exe
-            dist/EDNavigator.exe.sha256.txt
+            dist/ed_navigator_v*.exe
+            dist/ed_navigator_v*.exe.sha256.txt
