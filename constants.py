@@ -6,7 +6,7 @@ import os
 # ---------------------------------------------------------------------------
 # App version & update feed
 # ---------------------------------------------------------------------------
-VERSION     = "1.1.1"
+VERSION     = "1.1.2"
 GITHUB_REPO = "s4nby/ed-nav"
 
 # ---------------------------------------------------------------------------
@@ -72,7 +72,7 @@ PROXIMITY_EXIT_M     = 20    # metres — hysteresis: exit proximity state above
 # Orbital zone boundary ≈ 2 × planet_radius altitude above surface
 # (orbit at 3× radius from centre = 2× from surface).
 # Needle initialises this far before entering the orbital zone.
-ORBITAL_ZONE_BUFFER_M = 500_000   # 500 km
+ORBITAL_ZONE_NEEDLE_M = 4_000_000  # 4,000 km — navigation needle + distance activates
 
 # ---------------------------------------------------------------------------
 # Planet default radius (metres)

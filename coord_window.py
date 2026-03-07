@@ -265,7 +265,6 @@ class CoordWindow(QWidget):
 
         # 3D planet preview — hidden until a body is selected
         self._planet_preview = PlanetPreviewWidget()
-        self._planet_preview.coord_picked.connect(self._on_coord_picked)
         layout.addWidget(self._planet_preview, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # Divider
@@ -425,10 +424,6 @@ class CoordWindow(QWidget):
         self._planet_preview.set_target(None, None)
         self.target_cleared.emit()
 
-    def _on_coord_picked(self, lat: float, lon: float) -> None:
-        self._lat_input.setText(str(lat))
-        self._lon_input.setText(str(lon))
-
     def _update_preview_marker(self) -> None:
         if not self._planet_preview.is_active:
             return
@@ -530,16 +525,19 @@ class CoordWindow(QWidget):
         QTimer.singleShot(200, lambda: setattr(self, '_menu_open', False))
         if chosen:
             body = chosen.data()
-            self._selected_body  = body
-            self._radius_m       = body.radius_m
-            self._body_name_input.setText(body.name)
+            self._selected_body = body
+            self._radius_m      = body.radius_m
             self._planet_name_label.setText(body.name)
 
-            # Activate / orient the 3D preview
-            lat = self._try_parse_float(self._lat_input.text())
-            lon = self._try_parse_float(self._lon_input.text())
-            self._planet_preview.reset_rotation(lat or 0.0, lon or 0.0)
-            self._planet_preview.set_target(lat, lon)
+            # Clear stale coordinates from any previously selected body
+            self._lat_input.clear()
+            self._lon_input.clear()
+            self._body_name_input.setText(body.name)
+            self._clear_error()
+
+            # Activate the 3D preview centred on the new body (no stale marker)
+            self._planet_preview.set_target(None, None)
+            self._planet_preview.reset_rotation(0.0, 0.0)
             self._planet_preview.set_active(True)
 
     # ------------------------------------------------------------------

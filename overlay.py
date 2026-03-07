@@ -12,7 +12,7 @@ from typing import Optional
 from PyQt6.QtCore    import Qt, QTimer, QPoint, QPointF, QRectF
 from PyQt6.QtCore    import QSettings
 from PyQt6.QtGui     import (QColor, QPainter, QPen, QBrush, QFont,
-                              QFontMetrics, QPainterPath)
+                              QPainterPath)
 from PyQt6.QtWidgets import QWidget, QApplication
 
 from constants import (
@@ -26,7 +26,7 @@ from constants import (
     PULSE_SPEED,
     ARRIVAL_DISTANCE_M,
     PROXIMITY_DISTANCE_M, PROXIMITY_EXIT_M,
-    ORBITAL_ZONE_BUFFER_M,
+    ORBITAL_ZONE_NEEDLE_M,
     DEFAULT_PLANET_RADIUS_M,
 )
 
@@ -75,11 +75,6 @@ class OverlayCanvas(QWidget):
         self._speed_scale:   float = 1.0   # tail length multiplier from speed
         self._pulse_phase:   float = 0.0
         self._idle_phase:    float = 0.0
-
-        # Flight-path angle derived from position deltas (altitude + distance)
-        self._flight_angle:  Optional[float] = None
-        self._prev_nav_alt:  Optional[float] = None
-        self._prev_nav_dist: Optional[float] = None
 
         # GPS dropout grace period — absorbs brief has_lat_long flickers
         self._gps_lost_frames: int = 0
@@ -136,8 +131,8 @@ class OverlayCanvas(QWidget):
         return self.height() // 2 - int(6 * self._scale())
 
     def _needle_cx(self) -> float:
-        """X pivot of the needle — shifted left to leave room for the inclination panel."""
-        return self.width() * 0.32
+        """X pivot of the needle — horizontally centred."""
+        return float(self._cx())
 
     def _in_resize_grip(self, pos) -> bool:
         return (pos.x() >= self.width()  - _RESIZE_GRIP
@@ -244,29 +239,6 @@ class OverlayCanvas(QWidget):
             if nav.relative_bearing is not None:
                 self._last_valid_rel_bearing = nav.relative_bearing
 
-        # ── Flight-path angle from position deltas ────────────────────
-        # Computed from altitude + distance changes between nav updates.
-        # Only updates when the position actually changes (nav refresh rate
-        # is ~100 ms; ticks between updates see zero delta and are skipped).
-        alt  = nav.altitude_m
-        dist = nav.distance_m
-        if alt is not None and dist is not None:
-            if self._prev_nav_alt is not None and self._prev_nav_dist is not None:
-                d_alt  = alt  - self._prev_nav_alt    # negative = descending
-                d_dist = self._prev_nav_dist - dist   # positive = approaching
-                if abs(d_alt) > 0.5 or abs(d_dist) > 0.5:
-                    raw = math.degrees(math.atan2(-d_alt, max(d_dist, 0.1)))
-                    if self._flight_angle is not None:
-                        self._flight_angle = 0.5 * self._flight_angle + 0.5 * raw
-                    else:
-                        self._flight_angle = raw
-            self._prev_nav_alt  = alt
-            self._prev_nav_dist = dist
-        else:
-            self._flight_angle  = None
-            self._prev_nav_alt  = None
-            self._prev_nav_dist = None
-
         # ── Speed scale — tail elongates with ship speed ───────────────
         spd = nav.speed_ms or 0.0
         self._speed_scale = 1.0 + min(1.0, spd / _SPEED_SCALE_MAX) * 0.55
@@ -323,13 +295,14 @@ class OverlayCanvas(QWidget):
             self._gps_lost_frames = 0
 
         # ── Altitude-based activation gate ────────────────────────────────
-        # Show the needle only within 150 km of the orbital zone boundary.
         # Orbital zone boundary ≈ 2 × planet_radius altitude above the surface
         # (orbit is at 3× radius from the planet's centre).
+        # Beyond 4,000 km of orbital zone → approach label only.
+        # Within 4,000 km → full needle + distance.
         if nav.altitude_m is not None:
             planet_radius = nav.planet_radius_m or DEFAULT_PLANET_RADIUS_M
-            activation_alt_m = 2.0 * planet_radius + ORBITAL_ZONE_BUFFER_M
-            if nav.altitude_m > activation_alt_m:
+            orbital_zone_alt = 2.0 * planet_radius
+            if nav.altitude_m > orbital_zone_alt + ORBITAL_ZONE_NEEDLE_M:
                 self._draw_approach_planet(p)
                 p.end()
                 return
@@ -343,7 +316,6 @@ class OverlayCanvas(QWidget):
         else:
             needle_color = self._bearing_color(nav.relative_bearing)
             self._draw_needle(p, self._display_angle, needle_color)
-            self._draw_inclination(p, nav)
             self._draw_distance(p, nav.distance_m)
 
         p.end()
@@ -435,103 +407,6 @@ class OverlayCanvas(QWidget):
         dot_color.setAlpha(220)
         p.setBrush(QBrush(dot_color))
         p.drawEllipse(QPointF(cx, cy), dot_r, dot_r)
-
-    def _draw_inclination(self, p: QPainter, nav: NavResult) -> None:
-        """
-        Pitch guidance in the right panel: 'XX° ▲' or 'XX° ▼'.
-        Single arrow to the right of the degree value:
-          ▲ — descent too steep, pull up (shallower)
-          ▼ — descent too shallow, push down (steeper)
-        Arrow hidden when on-target (within ±2° dead-band).
-        """
-        angle = nav.target_descent_angle_deg
-        if angle is None or nav.altitude_m is None or nav.altitude_m < 10.0:
-            return
-
-        # Descent-angle deadzone: angle is always positive here (0°–90°).
-        # The spec's "-60° to -90°" restricted range maps to > 60° in positive
-        # descent convention. For Caspian Explorer the limit shifts to 75°.
-        # When the required approach is steeper than the limit, suppress the panel.
-        dz_angle_limit = 75.0 if self._vehicle_name == _DZ_CASPIAN_NAME else 60.0
-        if angle >= dz_angle_limit:
-            return
-
-        angle = min(angle, dz_angle_limit)
-
-        s  = self._scale()
-        ns = s * _NEEDLE_SCALE
-
-        # ── Pitch direction ───────────────────────────────────────────
-        # Uses _flight_angle: the actual flight-path angle derived from
-        # altitude + distance position deltas, updated each time nav refreshes.
-        # Thresholds clamped to ±89° so extreme angles stay reachable.
-        need_up = need_down = False
-        if self._flight_angle is not None:
-            lower = max(-89.0, angle - 2.0)
-            upper = min( 89.0, angle + 2.0)
-            need_down = self._flight_angle < lower
-            need_up   = self._flight_angle > upper
-
-        on_target = (self._flight_angle is not None
-                     and not need_up and not need_down)
-
-        # ── Layout ───────────────────────────────────────────────────
-        panel_left = self._needle_cx() + NEEDLE_LENGTH * ns + 8 * s
-        panel_w    = self.width() - panel_left
-        mid        = float(self._cy())
-
-        font_sz = max(8, round(10 * s))
-        font    = QFont(FONT_FAMILY, font_sz)
-        text_h  = font_sz * 1.4 * s
-        text_str = f"{angle:.0f}\u00b0"
-
-        text_w = QFontMetrics(font).horizontalAdvance(text_str)
-
-        ah  = max(3, round(5 * s))   # arrow height
-        aw  = max(3, round(4 * s))   # arrow half-base
-        gap = max(2, round(3 * s))   # gap between text and arrow
-
-        # Centre the text+arrow unit in the panel
-        arrow_w  = aw * 2 if (need_up or need_down) else 0
-        unit_w   = text_w + (gap + arrow_w if arrow_w else 0)
-        start_x  = panel_left + (panel_w - unit_w) / 2.0
-        arrow_cx = start_x + text_w + gap + aw
-
-        # Degree text — only while orbital flight is active (AltitudeFromAverageRadius set)
-        if nav.in_orbital_flight:
-            col = QColor(_COLOR_BLUE if on_target else COLOR_ORANGE)
-            col.setAlpha(TEXT_ALPHA)
-            text_rect = QRectF(start_x, mid - text_h / 2, text_w + 2, text_h)
-            text_flags = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-
-            p.setFont(font)
-            shadow = QColor(0, 0, 0, 100)
-            p.setPen(QPen(shadow))
-            p.drawText(QRectF(text_rect.x() + 1, text_rect.y() + 1,
-                              text_rect.width(), text_rect.height()),
-                       text_flags, text_str)
-            p.setPen(QPen(col))
-            p.drawText(text_rect, text_flags, text_str)
-
-        # Inclination indicators — only when orbital flight is active and correction is required
-        if nav.in_orbital_flight and (need_up or need_down):
-            # Shadow
-            shadow_brush = QColor(0, 0, 0, 100)
-            off = 1
-            for brush_col, dx, dy in [(shadow_brush, off, off), (col, 0, 0)]:
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QBrush(brush_col))
-                arrow = QPainterPath()
-                if need_up:
-                    arrow.moveTo(arrow_cx + dx,      mid - ah / 2 + dy)
-                    arrow.lineTo(arrow_cx - aw + dx, mid + ah / 2 + dy)
-                    arrow.lineTo(arrow_cx + aw + dx, mid + ah / 2 + dy)
-                else:
-                    arrow.moveTo(arrow_cx + dx,      mid + ah / 2 + dy)
-                    arrow.lineTo(arrow_cx - aw + dx, mid - ah / 2 + dy)
-                    arrow.lineTo(arrow_cx + aw + dx, mid - ah / 2 + dy)
-                arrow.closeSubpath()
-                p.drawPath(arrow)
 
     def _draw_distance(self, p: QPainter, distance_m: Optional[float]) -> None:
         if distance_m is None:
@@ -665,7 +540,7 @@ class OverlayWindow(QWidget):
         self._canvas = OverlayCanvas(self)
         self._canvas.setGeometry(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
 
-        # Default position: upper-centre of primary screen
+        # Default position: top-centre of primary screen
         screen = QApplication.primaryScreen()
         if screen:
             sg = screen.geometry()
@@ -745,3 +620,200 @@ class OverlayWindow(QWidget):
                 self.move(int(x), int(y))
             except (ValueError, TypeError):
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Inclination overlay — independent window for the chevron pitch-correction cue
+# ---------------------------------------------------------------------------
+
+_INCL_W = 76   # px — fixed window width (chevrons + degree text)
+_INCL_H = 58   # px — fixed window height
+
+
+class InclinationCanvas(QWidget):
+    """
+    Draws the triple-chevron pitch-correction array.
+    Runs its own 30 FPS timer and flight-angle tracker.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self._nav:          NavResult      = NavResult()
+        self._vehicle_name: str            = ""
+        self._flight_angle: Optional[float] = None
+        self._prev_alt:     Optional[float] = None
+        self._prev_dist:    Optional[float] = None
+        self._chevron_phase: float          = 0.0
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(RENDER_INTERVAL_MS)
+
+    def update_nav(self, nav: NavResult, _has_target: bool) -> None:
+        self._nav          = nav
+        self._vehicle_name = (nav.vehicle_name or "").strip().lower()
+
+        # Compute flight-path angle from sequential altitude/distance deltas.
+        # Called at the nav-timer rate (~100 ms); only meaningful when position changes.
+        alt  = nav.altitude_m
+        dist = nav.distance_m
+        if alt is not None and dist is not None:
+            if self._prev_alt is not None and self._prev_dist is not None:
+                d_alt  = alt  - self._prev_alt
+                d_dist = self._prev_dist - dist
+                if abs(d_alt) > 0.5 or abs(d_dist) > 0.5:
+                    raw = math.degrees(math.atan2(-d_alt, max(d_dist, 0.1)))
+                    self._flight_angle = (
+                        0.5 * self._flight_angle + 0.5 * raw
+                        if self._flight_angle is not None else raw
+                    )
+            self._prev_alt  = alt
+            self._prev_dist = dist
+        else:
+            self._flight_angle = None
+            self._prev_alt     = None
+            self._prev_dist    = None
+
+    def _tick(self) -> None:
+        self._chevron_phase = (self._chevron_phase + 0.04) % 1.0
+        self.update()
+
+    def paintEvent(self, _) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        p.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
+        nav = self._nav
+        if not nav.in_orbital_flight:
+            p.end()
+            return
+
+        angle = nav.target_descent_angle_deg
+        if angle is None or nav.altitude_m is None or nav.altitude_m < 10.0:
+            p.end()
+            return
+
+        dz_limit = 75.0 if self._vehicle_name == _DZ_CASPIAN_NAME else 60.0
+        if angle >= dz_limit:
+            p.end()
+            return
+
+        angle = min(angle, dz_limit)
+
+        # No flight-angle data yet — nothing meaningful to display
+        if self._flight_angle is None:
+            p.end()
+            return
+
+        need_up   = self._flight_angle > min( 89.0, angle + 2.0)
+        need_down = self._flight_angle < max(-89.0, angle - 2.0)
+        on_target = not need_up and not need_down
+
+        # Colour: cyan/blue when aligned, amber/orange when correction required
+        base_hex = _COLOR_BLUE if on_target else COLOR_ORANGE
+
+        aw      = 8     # chevron half-width (px)
+        ch      = 8     # chevron arm height (px)
+        gap     = 6     # gap between chevrons (px)
+        pw      = 2.5   # pen width
+        pad     = 5     # left-edge padding
+        total_h = 3 * ch + 2 * gap
+        ax      = float(pad + aw)           # chevron x-centre (left-aligned)
+        top_y   = (self.height() - total_h) / 2.0
+
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        for i in range(3):
+            if on_target:
+                wave = 0.65   # static equal glow — no directional chase
+            else:
+                offset = ((2 - i) if need_up else i) / 3.0
+                wave   = 0.5 * (1.0 + math.sin(2.0 * math.pi * (self._chevron_phase - offset)))
+
+            alpha = int(30 + (TEXT_ALPHA - 30) * wave)
+            cy_i  = top_y + i * (ch + gap)
+
+            for dx, dy, a in ((1, 1, int(70 * wave)), (0, 0, alpha)):
+                col = QColor(0, 0, 0, a) if dx else QColor(base_hex)
+                if not dx:
+                    col.setAlpha(a)
+                p.setPen(QPen(col, pw))
+                path = QPainterPath()
+                if need_up or on_target:   # up-pointing chevrons: pull up / aligned
+                    path.moveTo(ax - aw + dx, cy_i + ch + dy)
+                    path.lineTo(ax      + dx, cy_i      + dy)
+                    path.lineTo(ax + aw + dx, cy_i + ch + dy)
+                else:
+                    path.moveTo(ax - aw + dx, cy_i      + dy)
+                    path.lineTo(ax      + dx, cy_i + ch + dy)
+                    path.lineTo(ax + aw + dx, cy_i      + dy)
+                p.drawPath(path)
+
+        # Degree value — immediately right of the chevron column
+        deg_text  = f"{angle:.0f}\u00b0"
+        font      = QFont(FONT_FAMILY, 11)
+        text_x    = ax + aw + 6
+        text_rect = QRectF(text_x, top_y, self.width() - text_x - 2, total_h)
+        flags     = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+
+        p.setFont(font)
+        shadow = QColor(0, 0, 0, 90)
+        p.setPen(QPen(shadow))
+        p.drawText(QRectF(text_rect.x() + 1, text_rect.y() + 1,
+                          text_rect.width(), text_rect.height()), flags, deg_text)
+        col = QColor(base_hex)
+        col.setAlpha(TEXT_ALPHA)
+        p.setPen(QPen(col))
+        p.drawText(text_rect, flags, deg_text)
+
+        p.end()
+
+
+class InclinationOverlay(QWidget):
+    """
+    Independent always-on-top click-through window for the chevron pitch cue.
+    Positioned on the right side to mirror the ED altitude ladder.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setFixedSize(_INCL_W, _INCL_H)
+
+        self._canvas = InclinationCanvas(self)
+        self._canvas.setGeometry(0, 0, _INCL_W, _INCL_H)
+
+        # Default position: right side, ~42 % down — ED altitude ladder area
+        screen = QApplication.primaryScreen()
+        if screen:
+            sg = screen.geometry()
+            self.move(
+                sg.left() + (sg.width() // 2) - _INCL_W - 160,
+                sg.top()  + int(sg.height() * 0.42),
+            )
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._apply_click_through()
+
+    def update_nav(self, nav: NavResult, has_target: bool) -> None:
+        self._canvas.update_nav(nav, has_target)
+
+    def _apply_click_through(self) -> None:
+        try:
+            hwnd     = int(self.winId())
+            user32   = ctypes.windll.user32
+            ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+        except Exception:
+            pass

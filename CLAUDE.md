@@ -21,7 +21,7 @@ pip install -r requirements.txt
 **Build executable:**
 ```bash
 pyinstaller build.spec
-# Output: dist/EDNavigator.exe
+# Output: dist/ed_navigator_v<VERSION>.exe
 ```
 
 **Generate icon (if icon.ico is missing):**

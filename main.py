@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import QApplication
 from coord_window import CoordWindow
 from hotkey       import GlobalHotkey
 from journal      import JournalWatcher
-from overlay      import OverlayWindow
+from overlay      import InclinationOverlay, OverlayWindow
 from tracker      import GameTracker
 from tray         import TrayIcon
 from updater      import UpdateChecker
@@ -49,11 +49,12 @@ def main():
     _startup_settings = QSettings("ED-Navigator", "Overlay")
     _last_system      = _startup_settings.value("journal/last_system", "")
 
-    tracker      = GameTracker()
-    journal      = JournalWatcher(last_session_system=_last_system)
-    updater      = UpdateChecker(GITHUB_REPO, VERSION)
-    overlay      = OverlayWindow()
-    coord_window = CoordWindow()
+    tracker       = GameTracker()
+    journal       = JournalWatcher(last_session_system=_last_system)
+    updater       = UpdateChecker(GITHUB_REPO, VERSION)
+    overlay       = OverlayWindow()
+    incl_overlay  = InclinationOverlay()
+    coord_window  = CoordWindow()
     hotkey       = GlobalHotkey()
     tray         = TrayIcon()
 
@@ -62,6 +63,7 @@ def main():
     tracker.start()
     journal.start()
     overlay.show()
+    incl_overlay.show()
     coord_window.show()
     tray.show()
 
@@ -78,6 +80,7 @@ def main():
     # ------------------------------------------------------------------
     def _toggle_overlay():
         new_visible = overlay.toggle_visibility()
+        incl_overlay.setVisible(new_visible)
         _state["overlay_visible"] = new_visible
         tray.set_overlay_visible(new_visible)
         # If we're hiding while in move mode, exit move mode too
@@ -158,6 +161,7 @@ def main():
         has_target = tracker.has_target()
         nav.vehicle_name = journal.get_vehicle_name()
         overlay.update_nav(nav, has_target)
+        incl_overlay.update_nav(nav, has_target)
         coord_window.update_status(nav, has_target)
         coord_window.update_bodies(journal.get_bodies(), journal.get_system(), journal.get_scan_required())
 

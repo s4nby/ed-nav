@@ -7,7 +7,7 @@
 
 import math
 
-from PyQt6.QtCore    import Qt, QPointF, QRectF, pyqtSignal
+from PyQt6.QtCore    import Qt, QPointF, QRectF
 from PyQt6.QtGui     import (
     QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QRadialGradient,
 )
@@ -29,17 +29,14 @@ class PlanetPreviewWidget(QWidget):
         coord_picked(lat, lon) — emitted when the user clicks a point on the surface
     """
 
-    coord_picked = pyqtSignal(float, float)  # lat, lon
-
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self._yaw   =  30.0   # degrees — spin around vertical axis
         self._pitch =  20.0   # degrees — tilt up/down
 
-        self._active    = False      # False → placeholder dot; True → full sphere
-        self._drag_pos  = None
-        self._press_pos = None       # used to distinguish click vs drag
+        self._active   = False   # False → placeholder dot; True → full sphere
+        self._drag_pos = None
 
         self._target_lat: float | None = None
         self._target_lon: float | None = None
@@ -85,19 +82,14 @@ class PlanetPreviewWidget(QWidget):
         if not self._active:
             return
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos  = event.pos()
-            self._press_pos = event.pos()
+            self._drag_pos = event.pos()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseReleaseEvent(self, event):
         if not self._active:
             return
         if event.button() == Qt.MouseButton.LeftButton:
-            if (self._press_pos is not None
-                    and (event.pos() - self._press_pos).manhattanLength() < 5):
-                self._try_pick(event.pos())
-            self._drag_pos  = None
-            self._press_pos = None
+            self._drag_pos = None
             self.setCursor(Qt.CursorShape.OpenHandCursor)
 
     def mouseMoveEvent(self, event):
@@ -109,40 +101,6 @@ class PlanetPreviewWidget(QWidget):
             self._yaw   = (self._yaw + delta.x() * 0.5) % 360
             self._pitch = max(-85.0, min(85.0, self._pitch + delta.y() * 0.5))
             self.update()
-
-    def _try_pick(self, pos) -> None:
-        """Unproject a screen click back to lat/lon and emit coord_picked."""
-        w, h     = self.width(), self.height()
-        label_h  = 28
-        sphere_h = h - label_h
-        cx, cy   = w / 2.0, sphere_h / 2.0
-        R        = min(w, sphere_h) / 2.0 - 6.0
-
-        # Normalised coords relative to sphere centre
-        nx = (pos.x() - cx) / R
-        ny = (cy - pos.y()) / R         # screen Y is inverted
-        r2 = nx * nx + ny * ny
-        if r2 > 1.0:
-            return  # click outside the sphere disc
-
-        nz = math.sqrt(1.0 - r2)       # positive → visible hemisphere
-
-        # Inverse pitch rotation (transpose of pitch matrix)
-        yr, pr       = math.radians(self._yaw), math.radians(self._pitch)
-        cos_y, sin_y = math.cos(yr), math.sin(yr)
-        cos_p, sin_p = math.cos(pr), math.sin(pr)
-
-        y1 =  ny * cos_p + nz * sin_p
-        z1 = -ny * sin_p + nz * cos_p
-
-        # Inverse yaw rotation (transpose of yaw matrix)
-        x0 = nx * cos_y - z1 * sin_y
-        z0 = nx * sin_y + z1 * cos_y
-        y0 = y1
-
-        lat = math.degrees(math.asin(max(-1.0, min(1.0, y0))))
-        lon = math.degrees(math.atan2(x0, z0))
-        self.coord_picked.emit(round(lat, 4), round(lon, 4))
 
     # ------------------------------------------------------------------
     # Rendering
@@ -237,7 +195,7 @@ class PlanetPreviewWidget(QWidget):
             _draw_hud(p, w, h, sphere_h, "target on far side \u2014 drag to rotate")
         else:
             p.setPen(QColor(100, 50, 0, 130))
-            _draw_hud(p, w, h, sphere_h, "drag to rotate \u2022 click to set coordinates")
+            _draw_hud(p, w, h, sphere_h, "drag to rotate")
 
         p.end()
 

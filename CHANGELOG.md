@@ -5,18 +5,28 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.1.1] Released — 2026-03-07
+## [1.1.2] Released — 2026-03-07
 
 ### Added
-- 3D interactive planet preview in the settings window — drag to rotate, click to set coordinates
-- Heading deadzone: suppresses needle when target bearing falls in the compass blind-spot (−60° to −90°), with per-ship tuning for "Caspian Explorer" (−75° to −90°)
+- 3D interactive planet preview in the settings window — drag to rotate (click-to-fill coordinate feature removed due to raycasting inaccuracy against atmospheric geometry)
+- Heading deadzone: suppresses needle when target bearing falls in the compass blind-spot (−60° to −90°), with per-ship tuning for Caspian Explorer (−75° to −90°)
 - Proximity state (< 15 m): replaces needle + distance with a pulsing circle; hysteresis prevents flicker near the threshold
 - Natural sort in the body picker menu (numbers sort numerically, not lexicographically)
-- Descent pitch guidance panel: shows required approach angle and a single up/down arrow when off the glide path
+- Independent inclination overlay: triple-chevron pitch-correction array in its own click-through window, positioned to the left of screen centre to mirror the ED altitude ladder
+- Sequential chase animation on chevrons — sine-wave phase offset per chevron, direction matches required correction (up/down)
+- Conditional colour state on inclination cluster: cyan/blue (#4499FF) when glide path is aligned, amber/orange when correction is needed — matches the navigation needle's aligned colour exactly
+- Degree value displayed adjacent to the chevron column for at-a-glance angle reference
+- Staged HUD activation: full needle and distance readout appear within 4,000 km of the orbital zone boundary; approach label shown beyond that threshold
+- `AltitudeFromAverageRadius` flag (Status.json bit 29) used as the authoritative gate for orbital-flight UI — no heuristics
 
 ### Changed
-- Overlay window shrunk to 110 × 80 px default to reduce screen footprint
-- Needle pivot shifted left to make room for the inclination panel on the right
+- Overlay window shrunk to 110 × 80 px; needle re-centred (pivot no longer offset)
+- Main navigator restored to top-centre default position after inclination panel decoupling
+- Inclination indicators scaled up: larger chevrons, heavier stroke (2.5 px), 11 pt degree text for improved legibility
+
+### Fixed
+- Stale coordinate bug: switching planet bodies in the body picker no longer carries over the previous body's lat/lon into the new target
+- Wrong planet radius in Haversine: distance was calculated against the player's current physical location planet rather than the selected navigation target body; live radius is now used only as a fallback when no body has been explicitly chosen
 
 ---
 

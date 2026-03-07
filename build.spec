@@ -4,11 +4,16 @@
 # Usage:
 #   pyinstaller build.spec
 #
-# Output: dist/EDNavigator.exe  (single-file, no console window)
+# Output: dist/ed_navigator_v<VERSION>.exe  (single-file, no console window)
 
 import os
+import sys
 
 block_cipher = None
+
+# Pull version from constants.py without importing the full module
+sys.path.insert(0, os.path.dirname(SPEC))
+from constants import VERSION
 
 # Optional icon — include if icon.ico exists in the project root
 _icon_path = os.path.join(os.path.dirname(SPEC), "icon.ico")
@@ -50,7 +55,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="EDNavigator",
+    name=f"ed_navigator_v{VERSION}",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

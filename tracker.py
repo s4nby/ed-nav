@@ -321,9 +321,9 @@ class GameTracker:
             radius = self._planet_radius_m
             vertical_speed_ms = self._vertical_speed_ms
 
-        result.has_lat_long    = player.has_lat_long
-        result.body_name       = player.body_name
-        result.planet_radius_m = player.planet_radius_m
+        result.has_lat_long      = player.has_lat_long
+        result.body_name         = player.body_name
+        result.planet_radius_m   = player.planet_radius_m
         result.in_orbital_flight = bool(player.flags & FLAG_ALTITUDE_FROM_AVG_RADIUS)
 
         if not player.has_lat_long or not player.valid:
@@ -336,8 +336,12 @@ class GameTracker:
         lon1 = player.longitude
         hdg  = player.heading
 
-        # Prefer live planet radius from Status.json over the user-supplied value
-        radius = player.planet_radius_m if player.planet_radius_m else radius
+        # Use live planet radius only as a fallback when no body was explicitly
+        # selected (radius is still the default).  Never override a body the
+        # user deliberately chose — that would calculate distance against the
+        # wrong planet's geometry.
+        if radius == DEFAULT_PLANET_RADIUS_M and player.planet_radius_m:
+            radius = player.planet_radius_m
 
         bearing  = compute_bearing(lat1, lon1, target_lat, target_lon)
         distance = compute_distance_m(lat1, lon1, target_lat, target_lon, radius)
