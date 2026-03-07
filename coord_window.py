@@ -9,10 +9,11 @@
 # Closing the window hides it instead of destroying it (preserves state).
 
 import ctypes
+import json
 import re
 from typing import Optional
 
-from PyQt6.QtCore    import QEvent, QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore    import QEvent, QPoint, QSettings, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui     import QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
@@ -57,7 +58,8 @@ from planet_preview import PlanetPreviewWidget
 class _ElidedButton(QPushButton):
     """QPushButton that elides its label to fit the available width."""
 
-    _H_PAD = 36   # total horizontal padding (18px × 2 from stylesheet)
+    _H_PAD   = 36         # total horizontal padding (18px × 2 from stylesheet)
+    _CHEVRON = " \u25be"  # appended after elision, always visible beside the text
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(parent)
@@ -73,11 +75,11 @@ class _ElidedButton(QPushButton):
         self._refresh()
 
     def _refresh(self) -> None:
-        available = max(0, self.width() - self._H_PAD)
-        elided = QFontMetrics(self.font()).elidedText(
-            self._full_text, Qt.TextElideMode.ElideRight, available
-        )
-        super().setText(elided)
+        fm         = QFontMetrics(self.font())
+        chevron_w  = fm.horizontalAdvance(self._CHEVRON)
+        available  = max(0, self.width() - self._H_PAD - chevron_w)
+        elided     = fm.elidedText(self._full_text, Qt.TextElideMode.ElideRight, available)
+        super().setText(elided + self._CHEVRON)
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +150,9 @@ class CoordWindow(QWidget):
         self._bodies:        list[LandableBody] = []
         self._selected_body: LandableBody | None = None
         self._last_system:   str = ""
-        self._menu_open:     bool = False
+        self._menu_open:         bool = False
+        self._history_menu_open: bool = False
+        self._target_history: list[dict] = self._load_history()
 
         self._build_ui()
         self.setFixedSize(420, 630)
@@ -286,6 +290,7 @@ class CoordWindow(QWidget):
 
         # 3D planet preview — hidden until a body is selected
         self._planet_preview = PlanetPreviewWidget()
+        self._planet_preview.coord_picked.connect(self._on_coord_picked)
         layout.addWidget(self._planet_preview, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # Divider
@@ -296,11 +301,25 @@ class CoordWindow(QWidget):
         )
         layout.addWidget(line)
 
-        # Body name (optional manual entry)
+        # Body name row: label on the left, Recent ▾ flat-text trigger on the right
+        self._recent_btn = QPushButton("Recent \u25be")
+        self._recent_btn.setFont(QFont(_FONT, _SZ_LABEL, QFont.Weight.Bold))
+        self._recent_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._recent_btn.setStyleSheet(_flat_btn_ss)
+        self._recent_btn.setEnabled(bool(self._target_history))
+        self._recent_btn.setToolTip("Recently used targets")
+        self._recent_btn.clicked.connect(self._show_history_menu)
+
         body_name_label = QLabel("BODY NAME")
         body_name_label.setFont(QFont(_FONT, _SZ_LABEL, QFont.Weight.Bold))
         body_name_label.setStyleSheet(f"color: {_COL_LABEL}; letter-spacing: 1px;")
-        layout.addWidget(body_name_label)
+
+        body_name_row = QHBoxLayout()
+        body_name_row.setContentsMargins(0, 0, 0, 0)
+        body_name_row.setSpacing(0)
+        body_name_row.addWidget(body_name_label, 1)
+        body_name_row.addWidget(self._recent_btn)
+        layout.addLayout(body_name_row)
 
         self._body_name_input = self._make_line_edit("e.g.  Synuefe XR-H d11-102 1 b")
         layout.addWidget(self._body_name_input)
@@ -420,6 +439,7 @@ class CoordWindow(QWidget):
         self._clear_error()
         radius = self._radius_m if self._radius_m else DEFAULT_PLANET_RADIUS_M
         body_name = self._selected_body.name if self._selected_body else None
+        self._save_history(lat, lon, body_name)
         self.target_set.emit(lat, lon, radius, body_name)
 
     def _on_clear(self) -> None:
@@ -467,6 +487,100 @@ class CoordWindow(QWidget):
     def _clear_error(self) -> None:
         self._error_label.setVisible(False)
         self._error_label.setText("")
+
+    def _on_coord_picked(self, lat: float, lon: float) -> None:
+        """Fill coordinate inputs when the user clicks a point on the planet preview."""
+        self._lat_input.setText(str(lat))
+        self._lon_input.setText(str(lon))
+
+    # ------------------------------------------------------------------
+    # Target history
+    # ------------------------------------------------------------------
+
+    def _load_history(self) -> list[dict]:
+        s = QSettings("ED-Navigator", "Overlay")
+        raw = s.value("target_history", "[]")
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def _save_history(self, lat: float, lon: float, body: str | None) -> None:
+        entry = {"lat": lat, "lon": lon, "body": body}
+        # Remove duplicate entry if already present
+        self._target_history = [
+            e for e in self._target_history
+            if not (e["lat"] == lat and e["lon"] == lon)
+        ]
+        self._target_history.insert(0, entry)
+        self._target_history = self._target_history[:10]
+        s = QSettings("ED-Navigator", "Overlay")
+        s.setValue("target_history", json.dumps(self._target_history))
+        self._recent_btn.setEnabled(True)
+
+    def _show_history_menu(self) -> None:
+        if not self._target_history or self._history_menu_open:
+            return
+        self._history_menu_open = True
+        menu = QMenu(self)
+        for entry in self._target_history:
+            lat  = entry["lat"]
+            lon  = entry["lon"]
+            body = entry.get("body")
+            label = f"{lat:+.4f},  {lon:+.4f}"
+            if body:
+                label += f"   \u2014  {body}"
+            action = menu.addAction(label)
+            action.setData(entry)
+
+        # Dynamic font scaling: shrink until menu fits the window width.
+        # Height is intentionally unconstrained — the menu must be free to
+        # overflow the window's bottom edge (see positioning note below).
+        win_w = self.width()
+        win_h = self.height()
+
+        font_size = _SZ_LABEL
+        _MIN_FONT = 7
+        while font_size >= _MIN_FONT:
+            menu.setStyleSheet(
+                f"QMenu {{ background: #0a0a0a; color: {_COL_ACTIVE};"
+                f" font-family: '{_FONT}'; font-size: {font_size}pt;"
+                f" font-weight: bold; letter-spacing: 1px;"
+                f" border: 1px solid {_COL_LABEL}; border-radius: 4px; }}"
+                f"QMenu::item {{ padding: 6px 16px; border-radius: 2px;"
+                f" margin: 1px 4px; }}"
+                f"QMenu::item:selected {{ background: #2a2a2a;"
+                f" border: 1px solid {_COL_LABEL}; color: {_COL_ACTIVE}; }}"
+                f"QMenu::separator {{ height: 1px; background: {_COL_LABEL};"
+                f" margin: 3px 8px; }}"
+            )
+            menu.adjustSize()
+            hint = menu.sizeHint()
+            if hint.width() <= win_w:
+                break
+            font_size -= 1
+
+        trigger = self._recent_btn
+        menu.setMinimumWidth(trigger.width())
+        menu.adjustSize()
+        hint = menu.sizeHint()
+
+        # Centre horizontally under the trigger. No window-boundary clamp — the
+        # footer position means clamping to win_bottom would push the menu back
+        # up into the window content. Qt's QMenu is a native top-level popup and
+        # handles screen-edge overflow (including upward flip) on its own.
+        pos = trigger.mapToGlobal(trigger.rect().bottomLeft())
+        pos.setX(pos.x() + (trigger.width() - hint.width()) // 2)
+
+        chosen = menu.exec(pos)
+        QTimer.singleShot(200, lambda: setattr(self, '_history_menu_open', False))
+        if chosen:
+            entry = chosen.data()
+            self._lat_input.setText(str(entry["lat"]))
+            self._lon_input.setText(str(entry["lon"]))
+            body = entry.get("body") or ""
+            self._body_name_input.setText(body)
 
     def _show_body_menu(self) -> None:
         if not self._bodies or self._menu_open:

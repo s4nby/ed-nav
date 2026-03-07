@@ -273,7 +273,7 @@ class OverlayCanvas(QWidget):
         self._speed_scale = 1.0 + min(1.0, spd / _SPEED_SCALE_MAX) * 0.55
 
         # ── Misc ──────────────────────────────────────────────────────
-        if self._proximity_active:
+        if self._proximity_active or nav.arrived:
             self._pulse_phase += PULSE_SPEED
         if not self._has_target and not self._proximity_active:
             self._idle_phase += 0.2094  # 2π / (1.0 s × 30 FPS) → 1 s left-to-right sweep
@@ -315,7 +315,11 @@ class OverlayCanvas(QWidget):
 
         if not nav.has_lat_long:
             self._gps_lost_frames += 1
-            if self._gps_lost_frames < 30:   # ~1 s grace at 30 fps
+            # Shorten grace period at close range: stale data is more noticeable
+            # when distance changes rapidly (e.g. SRV at ~28 m/s moves 5 m in 166 ms).
+            close_range = (self._last_valid_distance_m or float("inf")) < ARRIVAL_DISTANCE_M
+            grace_limit = 5 if close_range else 30
+            if self._gps_lost_frames < grace_limit:
                 # Keep drawing the last known needle state so brief GPS flickers
                 # are invisible to the user rather than showing blank.
                 if self._has_target and self._last_valid_distance_m is not None:
@@ -332,7 +336,7 @@ class OverlayCanvas(QWidget):
 
         # ── Body mismatch — player's GPS is on a different body than the target ─
         if nav.body_mismatch:
-            self._draw_approach_planet(p)
+            self._draw_wrong_body(p)
             p.end()
             return
 
@@ -352,6 +356,9 @@ class OverlayCanvas(QWidget):
         if self._proximity_active:
             # Within 15 m: glowing circle only — no needle, no distance label
             self._draw_arrived(p, None)
+        elif nav.arrived:
+            # Within 200 m: glowing circle + distance label, no needle
+            self._draw_arrived(p, nav.distance_m)
         elif self._in_deadzone:
             # Target bearing is in forbidden arc — show distance only, no needle
             self._draw_distance(p, nav.distance_m)
