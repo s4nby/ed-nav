@@ -103,6 +103,25 @@ def _parse_paste(text: str) -> Optional[tuple[float, float]]:
     return None
 
 
+def _validate_coord(text: str, lo: float, hi: float) -> Optional[float]:
+    """
+    Return the parsed float if text is a valid in-range coordinate with at most
+    4 decimal places; otherwise return None.
+    Trailing zeros after the decimal point are not counted (85.36580 == 4 dp).
+    """
+    text = text.strip()
+    try:
+        val = float(text)
+    except ValueError:
+        return None
+    if not (lo <= val <= hi):
+        return None
+    if '.' in text:
+        if len(text.split('.')[1].rstrip('0')) > 4:
+            return None
+    return val
+
+
 # ---------------------------------------------------------------------------
 # CoordWindow
 # ---------------------------------------------------------------------------
@@ -113,7 +132,7 @@ class CoordWindow(QWidget):
     Emits target_set(lat, lon, radius_m) and target_cleared().
     """
 
-    target_set     = pyqtSignal(float, float, float)  # lat, lon, radius_m
+    target_set     = pyqtSignal(float, float, float, object)  # lat, lon, radius_m, body_name (str|None)
     target_cleared = pyqtSignal()
     move_overlay   = pyqtSignal()
     toggle_overlay = pyqtSignal()
@@ -170,6 +189,8 @@ class CoordWindow(QWidget):
             self._status_label.setText("Status: No signal")
         elif not has_target:
             self._status_label.setText("Status: Awaiting target")
+        elif nav.body_mismatch:
+            self._status_label.setText("Status: Approach target body")
         elif nav.arrived:
             self._status_label.setText("Status: ARRIVED")
         elif nav.distance_m is not None:
@@ -380,41 +401,26 @@ class CoordWindow(QWidget):
         lat_text = self._lat_input.text().strip()
         lon_text = self._lon_input.text().strip()
 
-        # Accept a full POI string pasted into the lat field
+        # Accept a full POI string pasted into the lat field.
+        # Round to 4 dp so the result always passes the precision check.
         parsed = _parse_paste(lat_text)
         if parsed:
-            lat, lon = parsed
-            self._lat_input.setText(str(lat))
-            self._lon_input.setText(str(lon))
-            lat_text = str(lat)
-            lon_text = str(lon)
+            lat_text = str(round(parsed[0], 4))
+            lon_text = str(round(parsed[1], 4))
+            self._lat_input.setText(lat_text)
+            self._lon_input.setText(lon_text)
 
-        errors = []
+        lat = _validate_coord(lat_text, -90.0, 90.0)
+        lon = _validate_coord(lon_text, -180.0, 180.0)
 
-        try:
-            lat = float(lat_text)
-        except ValueError:
-            errors.append("Latitude must be a number.")
-            lat = None
-
-        try:
-            lon = float(lon_text)
-        except ValueError:
-            errors.append("Longitude must be a number.")
-            lon = None
-
-        if lat is not None and not (-90.0 <= lat <= 90.0):
-            errors.append("Latitude must be between −90 and 90.")
-        if lon is not None and not (-180.0 <= lon <= 180.0):
-            errors.append("Longitude must be between −180 and 180.")
-
-        if errors:
-            self._show_error(" ".join(errors))
+        if lat is None or lon is None:
+            self._show_error("Wrong data entered.")
             return
 
         self._clear_error()
         radius = self._radius_m if self._radius_m else DEFAULT_PLANET_RADIUS_M
-        self.target_set.emit(lat, lon, radius)
+        body_name = self._selected_body.name if self._selected_body else None
+        self.target_set.emit(lat, lon, radius, body_name)
 
     def _on_clear(self) -> None:
         self._lat_input.clear()
@@ -427,8 +433,8 @@ class CoordWindow(QWidget):
     def _update_preview_marker(self) -> None:
         if not self._planet_preview.is_active:
             return
-        lat = self._try_parse_float(self._lat_input.text())
-        lon = self._try_parse_float(self._lon_input.text())
+        lat = _validate_coord(self._lat_input.text(), -90.0, 90.0)
+        lon = _validate_coord(self._lon_input.text(), -180.0, 180.0)
         self._planet_preview.set_target(lat, lon)
 
     def _fit_to_header(self) -> None:

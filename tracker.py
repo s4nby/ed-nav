@@ -102,7 +102,7 @@ class NavResult:
                  "body_name", "planet_radius_m",
                  "altitude_m", "speed_ms", "vertical_speed_ms",
                  "target_descent_angle_deg", "vehicle_name",
-                 "in_orbital_flight")
+                 "in_orbital_flight", "target_epoch", "body_mismatch")
 
     def __init__(self):
         self.bearing_to_target:       Optional[float] = None
@@ -118,6 +118,8 @@ class NavResult:
         self.target_descent_angle_deg: Optional[float] = None
         self.vehicle_name:            Optional[str]   = None
         self.in_orbital_flight:       bool = False
+        self.target_epoch:            int  = 0
+        self.body_mismatch:           bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +255,8 @@ class GameTracker:
         self._target_lat: Optional[float] = None
         self._target_lon: Optional[float] = None
         self._planet_radius_m: float = DEFAULT_PLANET_RADIUS_M
+        self._target_epoch: int = 0
+        self._target_body: Optional[str] = None
 
         self._thread: Optional[threading.Thread] = None
         self._running: bool = False
@@ -278,12 +282,15 @@ class GameTracker:
         self._running = False
 
     def set_target(self, lat: float, lon: float,
-                   planet_radius_m: float = DEFAULT_PLANET_RADIUS_M) -> None:
-        """Set the destination surface coordinates."""
+                   planet_radius_m: float = DEFAULT_PLANET_RADIUS_M,
+                   body_name: Optional[str] = None) -> None:
+        """Set the destination surface coordinates and optional target body name."""
         with self._lock:
             self._target_lat = lat
             self._target_lon = lon
             self._planet_radius_m = planet_radius_m
+            self._target_body = body_name
+            self._target_epoch += 1
 
     def clear_target(self) -> None:
         """Remove the destination target."""
@@ -320,6 +327,8 @@ class GameTracker:
             target_lon = self._target_lon
             radius = self._planet_radius_m
             vertical_speed_ms = self._vertical_speed_ms
+            result.target_epoch = self._target_epoch
+            target_body = self._target_body
 
         result.has_lat_long      = player.has_lat_long
         result.body_name         = player.body_name
@@ -330,6 +339,15 @@ class GameTracker:
             return result
 
         if target_lat is None or target_lon is None:
+            return result
+
+        # Body mismatch: a specific target body was named but the player's current
+        # GPS fix is on a different body.  The lat/lon coordinate spaces are
+        # body-relative, so computing a bearing across bodies is meaningless.
+        if (target_body is not None
+                and player.body_name is not None
+                and target_body.lower() != player.body_name.lower()):
+            result.body_mismatch = True
             return result
 
         lat1 = player.latitude

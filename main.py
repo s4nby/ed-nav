@@ -146,7 +146,7 @@ def main():
     )
 
     coord_window.target_set.connect(
-        lambda lat, lon, r: tracker.set_target(lat, lon, r)
+        lambda lat, lon, r, body: tracker.set_target(lat, lon, r, body)
     )
     coord_window.target_cleared.connect(tracker.clear_target)
 

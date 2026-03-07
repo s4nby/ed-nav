@@ -75,6 +75,11 @@ class OverlayCanvas(QWidget):
         self._speed_scale:   float = 1.0   # tail length multiplier from speed
         self._pulse_phase:   float = 0.0
         self._idle_phase:    float = 0.0
+        self._last_target_epoch: int = 0
+        # True from the moment a new target is set until the overlay receives a
+        # valid bearing for it.  Forces "APPROACH THE PLANET" in the interim so
+        # the previous planet's stale needle is never shown.
+        self._pending_approach: bool = False
 
         # GPS dropout grace period — absorbs brief has_lat_long flickers
         self._gps_lost_frames: int = 0
@@ -226,14 +231,38 @@ class OverlayCanvas(QWidget):
         else:
             self._in_deadzone = False
 
-        # ── Bearing tracking (clamped rate) ───────────────────────────
-        if nav.relative_bearing is not None and not self._proximity_active and not self._in_deadzone:
-            err  = shortest_arc(self._display_angle, nav.relative_bearing)
-            step = max(-MAX_ROTATE_PER_FRAME, min(MAX_ROTATE_PER_FRAME, err))
-            self._display_angle = (self._display_angle + step) % 360.0
+        # ── New-target detection ───────────────────────────────────────
+        # Runs unconditionally so the flag is set even when the bearing block
+        # below is skipped (body_mismatch, no GPS, etc.).
+        if nav.target_epoch != self._last_target_epoch:
+            self._pending_approach       = True
+            # Wipe stale grace-period values so the old needle cannot bleed
+            # through during GPS dropout on the new body.
+            self._last_valid_distance_m  = None
+            self._last_valid_rel_bearing = None
+
+        # ── Bearing tracking (clamped rate, snap on new target) ───────
+        # Skip when the player's GPS fix is on a different body than the target —
+        # the bearing would be computed across mismatched coordinate spaces.
+        if (nav.relative_bearing is not None
+                and not self._proximity_active
+                and not self._in_deadzone
+                and not nav.body_mismatch):
+            if nav.target_epoch != self._last_target_epoch:
+                # New target set — snap immediately instead of animating
+                self._display_angle      = nav.relative_bearing
+                self._last_target_epoch  = nav.target_epoch
+            else:
+                err  = shortest_arc(self._display_angle, nav.relative_bearing)
+                step = max(-MAX_ROTATE_PER_FRAME, min(MAX_ROTATE_PER_FRAME, err))
+                self._display_angle = (self._display_angle + step) % 360.0
+
+        # ── Clear pending-approach once a valid bearing is confirmed ───
+        if nav.has_lat_long and not nav.body_mismatch and nav.relative_bearing is not None:
+            self._pending_approach = False
 
         # Save last good nav values for GPS dropout grace rendering
-        if nav.has_lat_long:
+        if nav.has_lat_long and not nav.body_mismatch:
             if nav.distance_m is not None:
                 self._last_valid_distance_m = nav.distance_m
             if nav.relative_bearing is not None:
@@ -277,6 +306,13 @@ class OverlayCanvas(QWidget):
             p.end()
             return
 
+        # ── New target set — show approach text immediately, bypass GPS grace ──
+        if self._pending_approach:
+            self._gps_lost_frames = 0
+            self._draw_approach_planet(p)
+            p.end()
+            return
+
         if not nav.has_lat_long:
             self._gps_lost_frames += 1
             if self._gps_lost_frames < 30:   # ~1 s grace at 30 fps
@@ -293,6 +329,12 @@ class OverlayCanvas(QWidget):
             return
         else:
             self._gps_lost_frames = 0
+
+        # ── Body mismatch — player's GPS is on a different body than the target ─
+        if nav.body_mismatch:
+            self._draw_approach_planet(p)
+            p.end()
+            return
 
         # ── Altitude-based activation gate ────────────────────────────────
         # Orbital zone boundary ≈ 2 × planet_radius altitude above the surface
@@ -470,12 +512,18 @@ class OverlayCanvas(QWidget):
 
     def _draw_approach_planet(self, p: QPainter) -> None:
         """Shown when a target is set but the player has no GPS (not near/on planet)."""
+        self._draw_text_overlay(p, "APPROACH\nTHE PLANET")
+
+    def _draw_wrong_body(self, p: QPainter) -> None:
+        """Shown when the player's GPS fix is on a different body than the target."""
+        self._draw_text_overlay(p, "WRONG\nBODY")
+
+    def _draw_text_overlay(self, p: QPainter, msg: str) -> None:
         s     = self._scale()
         font  = QFont(FONT_FAMILY, max(7, round(10 * s)))
         rect  = QRectF(4, 0, self.width() - 8, self.height())
         flags = (Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
                  | Qt.TextFlag.TextWordWrap)
-        msg   = "APPROACH\nTHE PLANET"
 
         p.setFont(font)
         shadow = QColor(0, 0, 0, 100)
@@ -696,12 +744,39 @@ class InclinationCanvas(QWidget):
             p.end()
             return
 
-        dz_limit = 75.0 if self._vehicle_name == _DZ_CASPIAN_NAME else 60.0
-        if angle >= dz_limit:
+        dz_limit   = 75.0 if self._vehicle_name == _DZ_CASPIAN_NAME else 60.0
+        in_unsafe  = angle >= dz_limit
+        raw_angle  = angle
+        angle      = min(angle, dz_limit)
+
+        # Shared geometry (needed for both unsafe and normal paths)
+        aw      = 8     # chevron half-width (px)
+        ch      = 8     # chevron arm height (px)
+        gap     = 6     # gap between chevrons (px)
+        pad     = 5     # left-edge padding
+        total_h = 3 * ch + 2 * gap
+        ax      = float(pad + aw)
+        top_y   = (self.height() - total_h) / 2.0
+
+        deg_text   = f"{raw_angle:.0f}\u00b0"
+        font       = QFont(FONT_FAMILY, 11)
+        text_x     = ax + aw + 6
+        text_rect  = QRectF(text_x, top_y, self.width() - text_x - 2, total_h)
+        text_flags = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+
+        if in_unsafe:
+            # Angle is too steep — suppress chevrons, keep degree value in red
+            p.setFont(font)
+            shadow = QColor(0, 0, 0, 90)
+            p.setPen(QPen(shadow))
+            p.drawText(QRectF(text_rect.x() + 1, text_rect.y() + 1,
+                              text_rect.width(), text_rect.height()), text_flags, deg_text)
+            col = QColor(COLOR_ERROR)
+            col.setAlpha(TEXT_ALPHA)
+            p.setPen(QPen(col))
+            p.drawText(text_rect, text_flags, deg_text)
             p.end()
             return
-
-        angle = min(angle, dz_limit)
 
         # No flight-angle data yet — nothing meaningful to display
         if self._flight_angle is None:
@@ -715,15 +790,7 @@ class InclinationCanvas(QWidget):
         # Colour: cyan/blue when aligned, amber/orange when correction required
         base_hex = _COLOR_BLUE if on_target else COLOR_ORANGE
 
-        aw      = 8     # chevron half-width (px)
-        ch      = 8     # chevron arm height (px)
-        gap     = 6     # gap between chevrons (px)
-        pw      = 2.5   # pen width
-        pad     = 5     # left-edge padding
-        total_h = 3 * ch + 2 * gap
-        ax      = float(pad + aw)           # chevron x-centre (left-aligned)
-        top_y   = (self.height() - total_h) / 2.0
-
+        pw = 2.5
         p.setBrush(Qt.BrushStyle.NoBrush)
 
         for i in range(3):
@@ -753,21 +820,15 @@ class InclinationCanvas(QWidget):
                 p.drawPath(path)
 
         # Degree value — immediately right of the chevron column
-        deg_text  = f"{angle:.0f}\u00b0"
-        font      = QFont(FONT_FAMILY, 11)
-        text_x    = ax + aw + 6
-        text_rect = QRectF(text_x, top_y, self.width() - text_x - 2, total_h)
-        flags     = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-
         p.setFont(font)
         shadow = QColor(0, 0, 0, 90)
         p.setPen(QPen(shadow))
         p.drawText(QRectF(text_rect.x() + 1, text_rect.y() + 1,
-                          text_rect.width(), text_rect.height()), flags, deg_text)
+                          text_rect.width(), text_rect.height()), text_flags, deg_text)
         col = QColor(base_hex)
         col.setAlpha(TEXT_ALPHA)
         p.setPen(QPen(col))
-        p.drawText(text_rect, flags, deg_text)
+        p.drawText(text_rect, text_flags, deg_text)
 
         p.end()
 
