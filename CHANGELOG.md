@@ -5,6 +5,24 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.4.3] Released — 2026-03-11
+
+### Added
+- Sidebar search button: when the sidebar is expanded, a Search icon appears on the opposite side of the hamburger button
+- Bookmark search bar: clicking the search icon switches to the Bookmarks page and reveals a filter input
+- Bookmark filtering by name, system, body, or coordinates (case-insensitive substring match)
+- Add-bookmark placeholder is suppressed during an active search to avoid confusion
+
+### Changed
+- Removed "MENU" text label from the expanded sidebar header; replaced with the search icon
+- Sidebar collapse now also hides and clears the search bar
+
+### Fixed
+- Recent context menu item padding reduced (6 px → 3 px vertical, 16 px → 12 px horizontal) for a denser, desktop-class layout
+- Recent context menu font size reduced by 1 pt to match
+
+---
+
 ## [1.4.0] Released — 2026-03-11
 
 ### Added

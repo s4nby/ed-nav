@@ -536,6 +536,7 @@ class _NavIcon(QWidget):
     BOOKMARKS = 5
     EDIT    = 6
     MENU    = 7
+    SEARCH  = 8
     _SZ     = 16
 
     def __init__(self, kind: int, parent=None):
@@ -685,6 +686,16 @@ class _NavIcon(QWidget):
             p.drawLine(QPointF(c - w, c - 4.5), QPointF(c + w, c - 4.5))
             p.drawLine(QPointF(c - w, c),       QPointF(c + w, c))
             p.drawLine(QPointF(c - w, c + 4.5), QPointF(c + w, c + 4.5))
+
+        elif self._kind == self.SEARCH:
+            pen = QPen(self._color, 1.6)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            # Circle lens
+            p.drawEllipse(QPointF(c - 2.0, c - 2.0), 4.2, 4.2)
+            # Handle
+            p.drawLine(QPointF(c + 1.2, c + 1.2), QPointF(c + 5.5, c + 5.5))
 
         p.end()
 
@@ -838,7 +849,7 @@ def _menu_ss(font_size: int) -> str:
         f" font-family: '{_FONT}'; font-size: {font_size}pt;"
         f" font-weight: bold; letter-spacing: 1px;"
         f" border: 1px solid {_COL_LABEL}; border-radius: 4px; }}"
-        f"QMenu::item {{ padding: 6px 16px; }}"
+        f"QMenu::item {{ padding: 3px 12px; }}"
         f"QMenu::item:selected {{ background: #2a2a2a; color: {_COL_ACTIVE}; }}"
         f"QMenu::item:disabled {{ color: {_COL_DIM}; }}"
         f"QMenu::separator {{ height: 1px; background: #252525; margin: 3px 8px; }}"
@@ -1250,35 +1261,50 @@ class CoordWindow(QWidget):
 
         layout.addWidget(_Separator())
 
+        # Search bar (hidden until search button is toggled)
+        self._bookmark_search_bar = QLineEdit()
+        self._bookmark_search_bar.setPlaceholderText("name, system, body, coords…")
+        self._bookmark_search_bar.setFont(QFont(_FONT_MONO, _SZ_INPUT))
+        self._bookmark_search_bar.setStyleSheet(
+            f"QLineEdit {{ background: {_COL_INPUT_BG}; color: {_COL_ACTIVE};"
+            f" border: 1px solid {_COL_LABEL}; border-radius: 3px;"
+            f" padding: 3px 6px; }}"
+            f"QLineEdit:focus {{ border-color: {_COL_ACTIVE}; }}"
+        )
+        self._bookmark_search_bar.setVisible(False)
+        self._bookmark_search_bar.textChanged.connect(self._filter_bookmarks)
+        layout.addWidget(self._bookmark_search_bar)
+
         # Scroll area for the gallery
         self._bookmark_scroll = QScrollArea()
         self._bookmark_scroll.setWidgetResizable(True)
         self._bookmark_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._bookmark_scroll.setStyleSheet("background: transparent;")
-        
+
         self._bookmark_container = QWidget()
         self._bookmark_container.setStyleSheet("background: transparent;")
         self._bookmark_grid = QGridLayout(self._bookmark_container)
         self._bookmark_grid.setContentsMargins(0, 10, 0, 10)
         self._bookmark_grid.setSpacing(12)
         self._bookmark_grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        
+
         self._bookmark_scroll.setWidget(self._bookmark_container)
         layout.addWidget(self._bookmark_scroll)
 
         self._refresh_bookmarks()
         self._content_stack.addWidget(page)
 
-    def _refresh_bookmarks(self) -> None:
-        """Rebuild the bookmark card gallery."""
+    def _refresh_bookmarks(self, subset: list[dict] | None = None) -> None:
+        """Rebuild the bookmark card gallery, optionally limited to *subset*."""
         # Clear existing
         while self._bookmark_grid.count():
             item = self._bookmark_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
+        entries = subset if subset is not None else self._bookmarks
         row, col = 0, 0
-        for b_data in self._bookmarks:
+        for b_data in entries:
             card = _BookmarkCard(b_data)
             card.clicked.connect(self._on_bookmark_clicked)
             card.edit_clicked.connect(self._on_bookmark_edit)
@@ -1289,10 +1315,41 @@ class CoordWindow(QWidget):
                 col = 0
                 row += 1
 
-        # Add placeholder
-        add_btn = _AddBookmarkPlaceholder()
-        add_btn.clicked.connect(self._on_add_bookmark)
-        self._bookmark_grid.addWidget(add_btn, row, col)
+        # Only show the add-placeholder when not filtering
+        if subset is None:
+            add_btn = _AddBookmarkPlaceholder()
+            add_btn.clicked.connect(self._on_add_bookmark)
+            self._bookmark_grid.addWidget(add_btn, row, col)
+
+    def _filter_bookmarks(self, query: str) -> None:
+        """Filter the bookmark gallery by name, system, body, or coordinates."""
+        q = query.strip().lower()
+        if not q:
+            self._refresh_bookmarks()
+            return
+        matched = []
+        for b in self._bookmarks:
+            haystack = " ".join([
+                b.get("name", ""),
+                b.get("system", ""),
+                b.get("body", ""),
+                f"{b.get('lat', '')}",
+                f"{b.get('lon', '')}",
+            ]).lower()
+            if q in haystack:
+                matched.append(b)
+        self._refresh_bookmarks(subset=matched)
+
+    def _toggle_bookmark_search(self) -> None:
+        """Show/focus the search bar on the Bookmarks page."""
+        # Switch to the bookmarks page (index 1)
+        self._sidebar_nav_select(1)
+        visible = not self._bookmark_search_bar.isVisible()
+        self._bookmark_search_bar.setVisible(visible)
+        if visible:
+            self._bookmark_search_bar.setFocus()
+        else:
+            self._bookmark_search_bar.clear()
 
     def _on_add_bookmark(self) -> None:
         """Open a dialog for manual bookmark entry."""
@@ -1419,7 +1476,7 @@ class CoordWindow(QWidget):
         s_layout.setContentsMargins(0, 0, 0, 14)
         s_layout.setSpacing(0)
 
-        # Top row: Hamburger + MENU label (label only visible when expanded)
+        # Top row: Hamburger [spacer] Search (search only visible when expanded)
         self._sidebar_top_row = QWidget()
         self._sidebar_top_row.setFixedHeight(32)
         top_row_layout = QHBoxLayout(self._sidebar_top_row)
@@ -1432,14 +1489,14 @@ class CoordWindow(QWidget):
         self._hamburger_btn.clicked.connect(self._toggle_sidebar)
         top_row_layout.addWidget(self._hamburger_btn)
 
-        self._sidebar_header_lbl = QLabel("MENU")
-        self._sidebar_header_lbl.setFont(QFont(_FONT, 8, QFont.Weight.Bold))
-        self._sidebar_header_lbl.setStyleSheet(
-            f"color: {_COL_DIM}; letter-spacing: 3px;"
-            " background: transparent; border: none; padding-left: 8px;"
+        top_row_layout.addStretch(1)
+
+        self._search_btn = _IconButton(
+            _NavIcon.SEARCH, "Search Bookmarks", size=(self._SIDEBAR_ICON_W, 32)
         )
-        self._sidebar_header_lbl.setVisible(False)
-        top_row_layout.addWidget(self._sidebar_header_lbl, 1)
+        self._search_btn.clicked.connect(self._toggle_bookmark_search)
+        self._search_btn.setVisible(False)
+        top_row_layout.addWidget(self._search_btn)
 
         s_layout.addWidget(self._sidebar_top_row)
 
@@ -1488,7 +1545,7 @@ class CoordWindow(QWidget):
 
     def _open_sidebar(self) -> None:
         self._sidebar_open = True
-        self._sidebar_header_lbl.setVisible(True)
+        self._search_btn.setVisible(True)
         self._sidebar_anim.stop()
         self._sidebar_anim.setStartValue(self._sidebar_w_cur)
         self._sidebar_anim.setEndValue(self._SIDEBAR_FULL_W)
@@ -1503,7 +1560,9 @@ class CoordWindow(QWidget):
 
     def _on_sidebar_anim_finished(self) -> None:
         if not self._sidebar_open:
-            self._sidebar_header_lbl.setVisible(False)
+            self._search_btn.setVisible(False)
+            self._bookmark_search_bar.setVisible(False)
+            self._bookmark_search_bar.clear()
 
     def _sidebar_nav_select(self, page_idx: int) -> None:
         for i, item in enumerate(self._sidebar_nav_items):
@@ -1752,7 +1811,7 @@ class CoordWindow(QWidget):
         win_w = self.width()
         win_h = self.height()
 
-        font_size = _SZ_LABEL
+        font_size = _SZ_LABEL - 1
         _MIN_FONT = 7
         while font_size >= _MIN_FONT:
             menu.setStyleSheet(_menu_ss(font_size))
