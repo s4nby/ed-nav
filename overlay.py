@@ -258,11 +258,12 @@ class OverlayCanvas(QWidget):
                 self._display_angle = (self._display_angle + step) % 360.0
 
         # ── Clear pending-approach once a valid bearing is confirmed ───
-        if nav.has_lat_long and not nav.body_mismatch and nav.relative_bearing is not None:
+        if (nav.has_lat_long and not nav.body_mismatch
+                and not nav.system_mismatch and nav.relative_bearing is not None):
             self._pending_approach = False
 
         # Save last good nav values for GPS dropout grace rendering
-        if nav.has_lat_long and not nav.body_mismatch:
+        if nav.has_lat_long and not nav.body_mismatch and not nav.system_mismatch:
             if nav.distance_m is not None:
                 self._last_valid_distance_m = nav.distance_m
             if nav.relative_bearing is not None:
@@ -303,6 +304,12 @@ class OverlayCanvas(QWidget):
         # This ensures the user always sees the app is active.
         if not self._has_target and not nav.arrived:
             self._draw_idle(p)
+            p.end()
+            return
+
+        # ── System mismatch — player is in a different star system than the target ─
+        if nav.system_mismatch:
+            self._draw_wrong_system(p)
             p.end()
             return
 
@@ -524,6 +531,10 @@ class OverlayCanvas(QWidget):
     def _draw_wrong_body(self, p: QPainter) -> None:
         """Shown when the player's GPS fix is on a different body than the target."""
         self._draw_text_overlay(p, "WRONG\nBODY")
+
+    def _draw_wrong_system(self, p: QPainter) -> None:
+        """Shown when the target was set in a different star system than the player's current one."""
+        self._draw_text_overlay(p, "WRONG\nSYSTEM")
 
     def _draw_text_overlay(self, p: QPainter, msg: str) -> None:
         s     = self._scale()

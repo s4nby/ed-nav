@@ -43,6 +43,19 @@ def main():
     # Keep running even when CoordWindow is the last visible window and is closed
     app.setQuitOnLastWindowClosed(False)
 
+    # Global styling for tooltips to match the ED-style theme
+    app.setStyleSheet(
+        "QToolTip {"
+        "  background-color: #1e1f20;"
+        "  color: #FF8C00;"
+        "  border: 1px solid #CC6600;"
+        "  padding: 5px;"
+        "  border-radius: 2px;"
+        "  font-family: 'Agency FB';"
+        "  font-size: 10pt;"
+        "}"
+    )
+
     # ------------------------------------------------------------------
     # Core objects
     # ------------------------------------------------------------------
@@ -119,18 +132,7 @@ def main():
     # ------------------------------------------------------------------
     # Update checker
     # ------------------------------------------------------------------
-    _pending_release_url = {"url": ""}
-
-    def _on_update_available(version: str, url: str) -> None:
-        _pending_release_url["url"] = url
-        tray.show_update_notification(version)
-
-    def _on_notification_clicked() -> None:
-        if _pending_release_url["url"]:
-            QDesktopServices.openUrl(QUrl(_pending_release_url["url"]))
-
-    updater.update_available.connect(_on_update_available)
-    tray.messageClicked.connect(_on_notification_clicked)
+    updater.update_available.connect(coord_window.show_update)
     updater.start()
 
     hotkey.activated.connect(_toggle_overlay)
@@ -146,7 +148,7 @@ def main():
     )
 
     coord_window.target_set.connect(
-        lambda lat, lon, r, body: tracker.set_target(lat, lon, r, body)
+        lambda lat, lon, r, body, sys: tracker.set_target(lat, lon, r, body, sys)
     )
     coord_window.target_cleared.connect(tracker.clear_target)
 
@@ -160,6 +162,11 @@ def main():
         nav        = tracker.get_nav()
         has_target = tracker.has_target()
         nav.vehicle_name = journal.get_vehicle_name()
+        if has_target:
+            target_sys  = tracker.get_target_system()
+            current_sys = journal.get_system()
+            if target_sys and current_sys:
+                nav.system_mismatch = target_sys.lower() != current_sys.lower()
         overlay.update_nav(nav, has_target)
         incl_overlay.update_nav(nav, has_target)
         coord_window.update_status(nav, has_target)

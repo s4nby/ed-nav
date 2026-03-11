@@ -5,6 +5,34 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.4.0] Released — 2026-03-11
+
+### Added
+- **Sidebar Navigation:** New animated sidebar for switching between Coordinate Entry, History, and Bookmarks panels
+- **Custom Title Bar:** Draggable title bar with integrated minimize/maximize/close controls and built-in update notification button (replaces tray balloon notifications)
+- **Bookmarks System:** Save and name favourite surface locations for quick access
+- **Star System Awareness:** Tracks which star system a target belongs to; "WRONG SYSTEM" overlay warning when in a different system than the target
+- **"APPROACH" State:** Displays "APPROACH THE PLANET" immediately after setting a new target until a valid GPS fix is confirmed, preventing stale needle display
+- **"WRONG BODY" Warning:** Visual alert when current GPS fix is on a different planet than the selected target
+- **Click-to-Set on Planet Preview:** Click directly on the 3D sphere to set navigation coordinates
+- **Far-Side Tracking:** Targets on the opposite side of the planet rendered as dashed "ghost" markers
+- **Planet Preview Auto-Activation:** Preview activates automatically when focusing coordinate input fields
+- **Randomize Button:** Generates random valid coordinates for exploration or testing
+- **Persistent History:** History menu now tracks body names and persists across sessions
+- Modern aesthetics: rounded corners, Elite Dangerous-themed tooltips, improved element spacing
+
+### Changed
+- Planet preview gains auto-rotation when idle and smooth fade-in animations
+- Activation threshold increased to 7,000 km for more lead time during orbital approach
+- Coordinate validation now strictly enforces 4 decimal places of precision
+
+### Fixed
+- GPS grace period tuned for close-range dropouts (< 200 m) to prevent flickering during final landing approach
+- Inclination panel alignment issues corrected; missing degree symbols added to readout
+- Release workflow: versioned executable filenames now handled correctly in automated build
+
+---
+
 ## [1.1.2] Released — 2026-03-07
 
 ### Added

@@ -102,7 +102,8 @@ class NavResult:
                  "body_name", "planet_radius_m",
                  "altitude_m", "speed_ms", "vertical_speed_ms",
                  "target_descent_angle_deg", "vehicle_name",
-                 "in_orbital_flight", "target_epoch", "body_mismatch")
+                 "in_orbital_flight", "target_epoch", "body_mismatch",
+                 "system_mismatch")
 
     def __init__(self):
         self.bearing_to_target:       Optional[float] = None
@@ -120,6 +121,7 @@ class NavResult:
         self.in_orbital_flight:       bool = False
         self.target_epoch:            int  = 0
         self.body_mismatch:           bool = False
+        self.system_mismatch:         bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +259,7 @@ class GameTracker:
         self._planet_radius_m: float = DEFAULT_PLANET_RADIUS_M
         self._target_epoch: int = 0
         self._target_body: Optional[str] = None
+        self._target_system: str = ""
 
         self._thread: Optional[threading.Thread] = None
         self._running: bool = False
@@ -283,14 +286,21 @@ class GameTracker:
 
     def set_target(self, lat: float, lon: float,
                    planet_radius_m: float = DEFAULT_PLANET_RADIUS_M,
-                   body_name: Optional[str] = None) -> None:
+                   body_name: Optional[str] = None,
+                   system: str = "") -> None:
         """Set the destination surface coordinates and optional target body name."""
         with self._lock:
             self._target_lat = lat
             self._target_lon = lon
             self._planet_radius_m = planet_radius_m
             self._target_body = body_name
+            self._target_system = system
             self._target_epoch += 1
+
+    def get_target_system(self) -> str:
+        """Return the star system the target was set in."""
+        with self._lock:
+            return self._target_system
 
     def clear_target(self) -> None:
         """Remove the destination target."""

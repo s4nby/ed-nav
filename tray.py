@@ -56,15 +56,6 @@ class TrayIcon(QSystemTrayIcon):
         """Update move menu text to reflect current move mode state."""
         self._move_action.setText("Done Moving" if active else "Move Overlay")
 
-    def show_update_notification(self, version: str) -> None:
-        """Show a tray balloon informing the user that an update is available."""
-        self.showMessage(
-            "ED Navigator — Update Available",
-            f"Version {version} is available. Click here to download.",
-            QSystemTrayIcon.MessageIcon.Information,
-            8000,   # visible for 8 seconds
-        )
-
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------

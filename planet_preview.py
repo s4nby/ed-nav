@@ -7,14 +7,17 @@
 
 import math
 
-from PyQt6.QtCore    import Qt, QPointF, QRectF, pyqtSignal
+from PyQt6.QtCore    import Qt, QPointF, QRectF, QTimer, pyqtSignal
 from PyQt6.QtGui     import (
     QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QRadialGradient,
 )
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
-_GRID_STEP = 30   # degrees between lat/lon grid lines
-_STEPS     = 90   # segments per grid line (higher = smoother arcs)
+_GRID_STEP          = 30     # degrees between lat/lon grid lines
+_STEPS              = 90     # segments per grid line (higher = smoother arcs)
+_ANIM_INTERVAL_MS   = 16     # ~60 fps animation tick
+_FADE_DURATION_MS   = 800    # fade-in from transparent to opaque
+_AUTOROT_DEG_PER_MS = 1.5 / 1000  # 1.5°/s → one full rotation ≈ 4 min
 
 
 class PlanetPreviewWidget(QWidget):
@@ -22,11 +25,11 @@ class PlanetPreviewWidget(QWidget):
     Interactive 3D sphere with lat/lon grid and a surface marker.
 
     Public API:
-        set_target(lat, lon)   — update the coordinate marker (None clears it)
-        reset_rotation(lat, lon) — spin view to show that coordinate front/centre
+        set_target(lat, lon)        — update the coordinate marker (None clears it)
+        reset_rotation(lat, lon)    — spin view to show that coordinate front/centre
 
     Signals:
-        coord_picked(lat, lon) — emitted when the user clicks a point on the surface
+        coord_picked(lat, lon)  — emitted when the user clicks a point on the surface
     """
 
     coord_picked = pyqtSignal(float, float)
@@ -37,12 +40,19 @@ class PlanetPreviewWidget(QWidget):
         self._yaw   =  30.0   # degrees — spin around vertical axis
         self._pitch =  20.0   # degrees — tilt up/down
 
-        self._active    = False   # False → placeholder dot; True → full sphere
+        self._active    = False
+        self._unknown   = False
         self._drag_pos  = None
-        self._press_pos = None    # tracks initial click position for click-vs-drag
+        self._press_pos = None
 
         self._target_lat: float | None = None
         self._target_lon: float | None = None
+
+        self._opacity: float = 1.0
+
+        self._anim_timer = QTimer(self)
+        self._anim_timer.setInterval(_ANIM_INTERVAL_MS)
+        self._anim_timer.timeout.connect(self._tick_anim)
 
         self.setMinimumSize(210, 238)
         self.setMaximumSize(260, 292)
@@ -58,12 +68,26 @@ class PlanetPreviewWidget(QWidget):
     def is_active(self) -> bool:
         return self._active
 
-    def set_active(self, active: bool) -> None:
+    def set_active(self, active: bool, unknown: bool = False) -> None:
         """Switch between placeholder (False) and full-sphere (True) rendering."""
-        self._active = active
+        self._active  = active
+        self._unknown = unknown if active else False
+        if active:
+            self._opacity = 0.0
+            self._anim_timer.start()
+        else:
+            self._anim_timer.stop()
+            self._opacity = 1.0
         self.setCursor(
             Qt.CursorShape.OpenHandCursor if active else Qt.CursorShape.ArrowCursor
         )
+        self.update()
+
+    def _tick_anim(self) -> None:
+        if self._opacity < 1.0:
+            self._opacity = min(1.0, self._opacity + _ANIM_INTERVAL_MS / _FADE_DURATION_MS)
+        if self._drag_pos is None:
+            self._yaw = (self._yaw + _AUTOROT_DEG_PER_MS * _ANIM_INTERVAL_MS) % 360.0
         self.update()
 
     def set_target(self, lat: float | None, lon: float | None) -> None:
@@ -78,7 +102,7 @@ class PlanetPreviewWidget(QWidget):
         self.update()
 
     # ------------------------------------------------------------------
-    # Mouse interaction — drag to rotate
+    # Mouse interaction — drag to rotate, click to pick coordinate
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event):
@@ -93,7 +117,6 @@ class PlanetPreviewWidget(QWidget):
         if not self._active:
             return
         if event.button() == Qt.MouseButton.LeftButton:
-            # Treat as a click if the cursor barely moved (< 5 px)
             if self._press_pos is not None:
                 delta = event.pos() - self._press_pos
                 if delta.manhattanLength() < 5:
@@ -119,10 +142,6 @@ class PlanetPreviewWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _inverse_project(self, px: float, py: float) -> tuple[float, float] | None:
-        """
-        Map a screen position to (lat_deg, lon_deg) on the sphere surface.
-        Returns None if the point is outside the sphere disc.
-        """
         w, h     = self.width(), self.height()
         label_h  = 28
         sphere_h = h - label_h
@@ -133,20 +152,17 @@ class PlanetPreviewWidget(QWidget):
         y_ndc = (cy - py) / R
         r2 = x_ndc ** 2 + y_ndc ** 2
         if r2 > 1.0:
-            return None  # outside sphere
+            return None
 
-        z2 = math.sqrt(1.0 - r2)   # front hemisphere
+        z2 = math.sqrt(1.0 - r2)
 
         yr, pr       = math.radians(self._yaw), math.radians(self._pitch)
         cos_y, sin_y = math.cos(yr), math.sin(yr)
         cos_p, sin_p = math.cos(pr), math.sin(pr)
 
-        # x1 is unchanged by pitch rotation
         x1 = x_ndc
-        # Inverse pitch (transpose of pitch rotation matrix)
         y1 =  y_ndc * cos_p + z2 * sin_p
         z1 = -y_ndc * sin_p + z2 * cos_p
-        # Inverse yaw (transpose of yaw rotation matrix)
         x0 =  x1 * cos_y - z1 * sin_y
         z0 =  x1 * sin_y + z1 * cos_y
         y0 =  y1
@@ -164,7 +180,7 @@ class PlanetPreviewWidget(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         w, h     = self.width(), self.height()
-        label_h  = 28                          # reserved strip for the HUD text
+        label_h  = 28
         sphere_h = h - label_h
         cx, cy   = w / 2.0, sphere_h / 2.0
         R        = min(w, sphere_h) / 2.0 - 6.0
@@ -174,18 +190,19 @@ class PlanetPreviewWidget(QWidget):
             p.end()
             return
 
-        # Pre-compute rotation trig
+        p.setOpacity(self._opacity)
+
         yr, pr       = math.radians(self._yaw),   math.radians(self._pitch)
         cos_y, sin_y = math.cos(yr), math.sin(yr)
         cos_p, sin_p = math.cos(pr), math.sin(pr)
 
         def project(lat_d: float, lon_d: float) -> tuple[float, float, float]:
-            """lat/lon (degrees) → (screen_x, screen_y, z).  z > 0 = visible."""
+            """lat/lon → (screen_x, screen_y, z).  z > 0 = visible."""
             la, lo = math.radians(lat_d), math.radians(lon_d)
-            # Spherical → Cartesian  (lon = 0 points toward viewer along +Z)
-            x0 =  math.cos(la) * math.sin(lo)
-            y0 =  math.sin(la)
-            z0 =  math.cos(la) * math.cos(lo)
+            x0 = math.cos(la) * math.sin(lo)
+            y0 = math.sin(la)
+            z0 = math.cos(la) * math.cos(lo)
+            
             # Yaw around Y-axis
             x1 =  x0 * cos_y + z0 * sin_y
             z1 = -x0 * sin_y + z0 * cos_y
@@ -195,7 +212,7 @@ class PlanetPreviewWidget(QWidget):
             z2 =  y1 * sin_p + z1 * cos_p
             return cx + x1 * R, cy - y2 * R, z2
 
-        # ---- Sphere body — warm lit face, dark limb ----
+        # ---- Sphere base — warm lit face, dark limb ----
         grad = QRadialGradient(cx - R * 0.28, cy - R * 0.32, R * 1.5)
         grad.setColorAt(0.00, QColor(90,  55,  14))
         grad.setColorAt(0.45, QColor(32,  18,   5))
@@ -204,7 +221,7 @@ class PlanetPreviewWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(QPointF(cx, cy), R, R)
 
-        # ---- Clip everything following to the sphere disc ----
+        # ---- Clip all subsequent drawing to the sphere disc ----
         clip = QPainterPath()
         clip.addEllipse(QPointF(cx, cy), R, R)
         p.setClipPath(clip)
@@ -214,7 +231,7 @@ class PlanetPreviewWidget(QWidget):
             pts = [project(lat, -180 + 360 * i / _STEPS) for i in range(_STEPS + 1)]
             _draw_arc(p, pts)
 
-        for lon in range(-180, 180, _GRID_STEP):                   # meridians
+        for lon in range(-180, 180, _GRID_STEP):                  # meridians
             pts = [project(-90 + 180 * i / _STEPS, lon) for i in range(_STEPS + 1)]
             _draw_arc(p, pts)
 
@@ -224,7 +241,7 @@ class PlanetPreviewWidget(QWidget):
         pm_pts = [project(-90 + 180 * i / _STEPS, 0) for i in range(_STEPS + 1)]
         _draw_arc(p, pm_pts, bright=True)
 
-        # ---- Surface marker ----
+        # ---- Surface marker (front hemisphere) or ghost (back) ----
         target_behind = False
         if self._target_lat is not None and self._target_lon is not None:
             sx, sy, tz = project(self._target_lat, self._target_lon)
@@ -232,11 +249,10 @@ class PlanetPreviewWidget(QWidget):
                 _draw_marker(p, sx, sy, R)
             else:
                 target_behind = True
+                _draw_occluded_marker(p, sx, sy, R)
 
-        # ---- Remove clip for rim and HUD ----
+        # ---- Remove clip, draw atmospheric limb ring ----
         p.setClipping(False)
-
-        # ---- Limb highlight ----
         p.setPen(QPen(QColor(255, 130, 0, 90), 1.5))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(QPointF(cx, cy), R, R)
@@ -248,7 +264,7 @@ class PlanetPreviewWidget(QWidget):
             _draw_hud(p, w, h, sphere_h, "target on far side \u2014 drag to rotate")
         else:
             p.setPen(QColor(100, 50, 0, 130))
-            _draw_hud(p, w, h, sphere_h, "drag to rotate")
+            _draw_hud(p, w, h, sphere_h, "drag to rotate \u2022 click to set coordinates")
 
         p.end()
 
@@ -278,39 +294,52 @@ def _draw_arc(
 
 
 def _draw_marker(painter: QPainter, sx: float, sy: float, R: float) -> None:
-    """ED-style crosshair marker (four arms with a central gap + dot)."""
+    """ED-style crosshair marker — four gapped arms and a central dot."""
     arm = max(7.0, R * 0.09)
     gap = arm * 0.30
     dot = arm * 0.20
 
     painter.setPen(QPen(QColor(255, 165, 0), 1.5))
     painter.setBrush(Qt.BrushStyle.NoBrush)
-
-    # Four gapped arms
     painter.drawLine(QPointF(sx - arm, sy), QPointF(sx - gap, sy))
     painter.drawLine(QPointF(sx + gap, sy), QPointF(sx + arm, sy))
     painter.drawLine(QPointF(sx, sy - arm), QPointF(sx, sy - gap))
     painter.drawLine(QPointF(sx, sy + gap), QPointF(sx, sy + arm))
 
-    # Centre dot
     painter.setBrush(QBrush(QColor(255, 165, 0)))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawEllipse(QPointF(sx, sy), dot, dot)
 
 
+def _draw_occluded_marker(painter: QPainter, sx: float, sy: float, R: float) -> None:
+    """Ghost crosshair for a target on the far side of the planet."""
+    arm  = max(6.0, R * 0.085)
+    gap  = arm * 0.30
+    ring = arm * 0.38
+
+    pen = QPen(QColor(255, 140, 0, 50), 1.1, Qt.PenStyle.DashLine)
+    pen.setDashPattern([2.5, 2.5])
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawLine(QPointF(sx - arm, sy), QPointF(sx - gap, sy))
+    painter.drawLine(QPointF(sx + gap, sy), QPointF(sx + arm, sy))
+    painter.drawLine(QPointF(sx, sy - arm), QPointF(sx, sy - gap))
+    painter.drawLine(QPointF(sx, sy + gap), QPointF(sx, sy + arm))
+
+    painter.setPen(QPen(QColor(255, 140, 0, 45), 1.0, Qt.PenStyle.DashLine))
+    painter.drawEllipse(QPointF(sx, sy), ring, ring)
+
+
 def _draw_placeholder(painter: QPainter, cx: float, cy: float, R: float) -> None:
     """Minimal placeholder drawn before any planet is selected."""
-    # Faint circle — small indicator, not full sphere size
     pr = R * 0.60
     painter.setPen(QPen(QColor(120, 60, 0, 40), 2.0, Qt.PenStyle.DashLine))
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawEllipse(QPointF(cx, cy), pr, pr)
 
-    # Small centred dot
-    dot_r = 3.5
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QBrush(QColor(160, 80, 0, 180)))
-    painter.drawEllipse(QPointF(cx, cy), dot_r, dot_r)
+    painter.drawEllipse(QPointF(cx, cy), 3.5, 3.5)
 
 
 def _draw_hud(painter: QPainter, w: int, h: int, sphere_h: float, text: str) -> None:
