@@ -1024,19 +1024,19 @@ class CoordWindow(QWidget):
             self._radius_m = nav.planet_radius_m
 
         if not nav.has_lat_long:
-            self._status_label.setText("Status: No signal")
+            self._status_label.setText("No signal")
         elif not has_target:
-            self._status_label.setText("Status: Awaiting target")
+            self._status_label.setText("Awaiting target")
         elif nav.body_mismatch:
-            self._status_label.setText("Status: Approach target body")
+            self._status_label.setText("Approach target body")
         elif nav.arrived:
-            self._status_label.setText("Status: ARRIVED")
+            self._status_label.setText("ARRIVED")
         elif nav.distance_m is not None:
             dist = nav.distance_m
             dist_str = f"{dist / 1000:.1f} km" if dist >= 1000 else f"{int(dist)} m"
-            self._status_label.setText(f"Status: TRACKING  —  {dist_str}")
+            self._status_label.setText(f"TRACKING  —  {dist_str}")
         else:
-            self._status_label.setText("Status: TRACKING")
+            self._status_label.setText("TRACKING")
 
     def update_bodies(self, bodies: list[LandableBody], system: str, scan_required: bool = False) -> None:
         """Called from push_nav() with the latest journal body list."""
@@ -1126,11 +1126,12 @@ class CoordWindow(QWidget):
             f"QPushButton:pressed {{ background: #994400; }}"
             f"QPushButton:disabled {{ color: {_COL_DIM}; border-color: {_COL_DIM}; }}"
         )
+        self._planet_name_label.setFixedWidth(self._planet_name_label.sizeHint().width())
         self._planet_name_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self._planet_name_label.setEnabled(False)
         self._planet_name_label.clicked.connect(self._show_body_menu)
 
-        self._status_label = QLabel("Status: No target set")
+        self._status_label = QLabel("No target set")
         self._status_label.setFont(QFont(_FONT, _SZ_STATUS))
         self._status_label.setStyleSheet(f"background: transparent; color: {_COL_LABEL};")
 
@@ -1862,7 +1863,7 @@ class CoordWindow(QWidget):
         win_w  = self.width()
         win_h  = self.height()
 
-        font_size = _SZ_LABEL
+        font_size = _SZ_LABEL - 1
         _MIN_FONT = 7
         while font_size >= _MIN_FONT:
             menu.setStyleSheet(_menu_ss(font_size))
