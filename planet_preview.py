@@ -333,12 +333,12 @@ def _draw_occluded_marker(painter: QPainter, sx: float, sy: float, R: float) -> 
 def _draw_placeholder(painter: QPainter, cx: float, cy: float, R: float) -> None:
     """Minimal placeholder drawn before any planet is selected."""
     pr = R * 0.60
-    painter.setPen(QPen(QColor(120, 60, 0, 40), 2.0, Qt.PenStyle.DashLine))
+    painter.setPen(QPen(QColor(120, 60, 0, 110), 2.0, Qt.PenStyle.DashLine))
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawEllipse(QPointF(cx, cy), pr, pr)
 
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QBrush(QColor(160, 80, 0, 180)))
+    painter.setBrush(QBrush(QColor(160, 80, 0, 220)))
     painter.drawEllipse(QPointF(cx, cy), 3.5, 3.5)
 
 

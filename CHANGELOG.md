@@ -5,6 +5,27 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.4.7] Released — 2026-03-12
+
+### Added
+- **Dynamic Context Menus**: 'Select a Planet' and 'Recent' menus now use a flexible width (320px–480px) and dynamic elision, ensuring long body names are handled gracefully while keeping coordinates visible.
+- **Compact Navigation Controls**: Relocated 'Clear' and 'Set Target' buttons to a new icon row beneath the longitude field, featuring custom vector icons: circular reset arrow and right-pointing send arrow.
+- **Improved Icon Visibility**: All vector icons scaled up to 20px with increased default opacity and brighter default colors (_COL_LABEL) for better legibility.
+- **Input Validation**: The 'Set Target' button is now dynamically enabled only when a valid body name is entered, providing immediate visual feedback for correct usage.
+
+### Changed
+- **Standardized UI Dimensions**: Standardized the top navigation bar and sidebar height to 48px, creating a unified visual "frame" for the main interface.
+- **Refined Aesthetics**: Updated global border and separator colors to #363636 for a subtler, more professional theme.
+- **Refactored Status Bar**: Simplified the top navigation bar with fixed-width labels ("NO SIGNAL", "ARRIVED", and numeric distance like "75.2 KM"), allowing the 'Select a Planet' button to be permanently expanded and centered.
+- **Enhanced Planet Preview**: Increased the opacity of 3D placeholder elements (central dot and dashed ring) for significantly better visibility against dark backgrounds.
+- **Sidebar Gutter**: Added a 1px right margin to the sidebar layout and an inset to highlights to prevent selection/hover bleed into the vertical separator.
+
+### Fixed
+- **Context Menu Hover Regression**: Resolved a persistent issue where planet labels in custom context menus failed to trigger their hover highlight states reliably.
+- **Icon Centering**: Perfectly centered the 'About' icon in the sidebar footer and other navigation items within the collapsed 48px width.
+
+---
+
 ## [1.4.3] Released — 2026-03-11
 
 ### Added
