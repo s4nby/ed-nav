@@ -54,9 +54,8 @@ class PlanetPreviewWidget(QWidget):
         self._anim_timer.setInterval(_ANIM_INTERVAL_MS)
         self._anim_timer.timeout.connect(self._tick_anim)
 
-        self.setMinimumSize(210, 238)
-        self.setMaximumSize(260, 292)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.setMinimumSize(210, 210)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setToolTip("")
 
@@ -146,7 +145,7 @@ class PlanetPreviewWidget(QWidget):
         label_h  = 28
         sphere_h = h - label_h
         cx, cy   = w / 2.0, sphere_h / 2.0
-        R        = min(w, sphere_h) / 2.0 - 6.0
+        R        = min(w, sphere_h) / 2.0 - 40.0
 
         x_ndc = (px - cx) / R
         y_ndc = (cy - py) / R
@@ -183,7 +182,7 @@ class PlanetPreviewWidget(QWidget):
         label_h  = 28
         sphere_h = h - label_h
         cx, cy   = w / 2.0, sphere_h / 2.0
-        R        = min(w, sphere_h) / 2.0 - 6.0
+        R        = min(w, sphere_h) / 2.0 - 20.0
 
         if not self._active:
             _draw_placeholder(p, cx, cy, R)

@@ -51,15 +51,16 @@ _COL_INPUT_BG = "#1e1f20"  # input background
 _COL_BORDER  = "#363636"   # global border color
 
 # UI Dimensions
-_TITLE_BAR_H      = 48
+_TITLE_BAR_H      = 40
 _SIDEBAR_ICON_W   = 48
 _SIDEBAR_FULL_W   = 160
-_SIDEBAR_HEADER_H = 48
+_SIDEBAR_HEADER_H = 40
 _FIXED_W, _FIXED_H = 520, 678
 
 from tracker import NavResult
 from journal import LandableBody
 from planet_preview import PlanetPreviewWidget
+from tray import TrayIcon
 
 # ---------------------------------------------------------------------------
 # Custom title bar
@@ -111,6 +112,13 @@ class _TitleBar(QWidget):
             f"QPushButton:pressed {{ background: #2a2a00; color: #FFCC00; }}"
         )
 
+        # App icon
+        icon_px = TrayIcon._make_icon().pixmap(18, 18)
+        self._icon_lbl = QLabel()
+        self._icon_lbl.setPixmap(icon_px)
+        self._icon_lbl.setFixedSize(18, 18)
+        self._icon_lbl.setStyleSheet("background: transparent; border: none;")
+
         title_lbl = QLabel(title)
         title_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         title_lbl.setFont(QFont(_FONT, 10, QFont.Weight.Bold))
@@ -143,6 +151,8 @@ class _TitleBar(QWidget):
         self._max_btn.setStyleSheet(_btn_ss)
         self._close_btn.setStyleSheet(_close_ss)
 
+        layout.addWidget(self._icon_lbl)
+        layout.addSpacing(8)
         layout.addWidget(title_lbl)
         layout.addStretch(1)
         layout.addWidget(self._update_btn)
@@ -1122,7 +1132,11 @@ class CoordWindow(QWidget):
     # ------------------------------------------------------------------
 
     def set_move_mode(self, active: bool) -> None:
-        self._move_btn.setText("Done Moving" if active else "Move Overlay")
+        self._move_btn.setText("Done moving" if active else "Move overlay")
+
+    def set_overlay_visible(self, visible: bool) -> None:
+        """Update the toggle button text based on overlay visibility."""
+        self._toggle_btn.setText("Hide overlay" if visible else "Show overlay")
 
     def show_update(self, version: str, url: str) -> None:
         """Display the update notification in the title bar."""
@@ -1228,7 +1242,7 @@ class CoordWindow(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(14, 10, 14, 14)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         self._planet_name_label = _ElidedButton("Select a Planet")
         self._planet_name_label.setFont(QFont(_FONT, _SZ_BTN, QFont.Weight.Bold))
@@ -1269,8 +1283,11 @@ class CoordWindow(QWidget):
 
         # 3D planet preview — hidden until a body is selected
         self._planet_preview = PlanetPreviewWidget()
+        self._planet_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._planet_preview.setMinimumSize(210, 210)
+        self._planet_preview.setMaximumSize(16777215, 16777215)
         self._planet_preview.coord_picked.connect(self._on_coord_picked)
-        layout.addWidget(self._planet_preview, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self._planet_preview, 1) # Give it stretch
 
         layout.addWidget(_Separator())
 
@@ -1302,31 +1319,38 @@ class CoordWindow(QWidget):
         self._body_name_input.textChanged.connect(self._on_body_name_changed)
         layout.addWidget(self._body_name_input)
 
-        # Latitude
-        lat_label = QLabel("LATITUDE  (−90 to 90)")
+        # Latitude / Longitude in a grid to save vertical space
+        coords_grid = QGridLayout()
+        coords_grid.setContentsMargins(0, 0, 0, 0)
+        coords_grid.setSpacing(8)
+
+        lat_label = QLabel("LATITUDE (−90 to 90)")
         lat_label.setFont(QFont(_FONT, _SZ_LABEL, QFont.Weight.Bold))
         lat_label.setStyleSheet(f"background: transparent; color: {_COL_LABEL}; letter-spacing: 1px;")
-        layout.addWidget(lat_label)
-
-        self._lat_input = self._make_line_edit("e.g.  −22.4500")
+        
+        self._lat_input = self._make_line_edit("e.g. −22.45")
         self._lat_input.textChanged.connect(self._clear_error)
         self._lat_input.textChanged.connect(self._update_preview_marker)
         self._lat_input.installEventFilter(self)
-        layout.addWidget(self._lat_input)
 
-        # Longitude
-        lon_label = QLabel("LONGITUDE  (−180 to 180)")
+        lon_label = QLabel("LONGITUDE (−180 to 180)")
         lon_label.setFont(QFont(_FONT, _SZ_LABEL, QFont.Weight.Bold))
         lon_label.setStyleSheet(f"background: transparent; color: {_COL_LABEL}; letter-spacing: 1px;")
-        layout.addWidget(lon_label)
 
-        self._lon_input = self._make_line_edit("e.g.  137.8800")
+        self._lon_input = self._make_line_edit("e.g. 137.88")
         self._lon_input.textChanged.connect(self._clear_error)
         self._lon_input.textChanged.connect(self._update_preview_marker)
         self._lon_input.installEventFilter(self)
-        layout.addWidget(self._lon_input)
 
-        # Control Row: Clear | [stretch] | Set
+        coords_grid.addWidget(lat_label, 0, 0)
+        coords_grid.addWidget(self._lat_input, 1, 0)
+        coords_grid.addWidget(lon_label, 0, 1)
+        coords_grid.addWidget(self._lon_input, 1, 1)
+        layout.addLayout(coords_grid)
+
+        layout.addSpacing(8)
+
+        # Control Row: Clear | [Move overlay] | [Hide overlay] | Set
         self._clear_btn = _IconButton(_NavIcon.CLEAR, "Clear inputs")
         self._clear_btn.clicked.connect(self._on_clear)
 
@@ -1334,10 +1358,34 @@ class CoordWindow(QWidget):
         self._set_btn.setEnabled(False) # Disabled until name is entered
         self._set_btn.clicked.connect(self._on_set)
 
+        self._move_btn   = self._make_button("Move overlay")
+        self._toggle_btn = self._make_button("Hide overlay")
+        
+        # Reduced font size and fixed width to fit inline
+        _small_btn_ss = (
+            f"QPushButton {{ background: #1e1f20; color: {_COL_ACTIVE};"
+            f" border: 1px solid {_COL_LABEL}; border-radius: 2px;"
+            f" padding: 4px 8px; letter-spacing: 0.5px; font-size: 9pt; }}"
+            f"QPushButton:hover {{ border-color: {_COL_ACTIVE}; background: #2a2a2a; }}"
+            f"QPushButton:pressed {{ background: #994400; }}"
+            f"QPushButton:disabled {{ color: {_COL_DIM}; border-color: {_COL_DIM}; }}"
+        )
+        self._move_btn.setStyleSheet(_small_btn_ss)
+        self._toggle_btn.setStyleSheet(_small_btn_ss)
+        self._move_btn.setFixedWidth(110)
+        self._toggle_btn.setFixedWidth(110)
+        
+        self._move_btn.clicked.connect(self.move_overlay)
+        self._toggle_btn.clicked.connect(self.toggle_overlay)
+        self._toggle_btn.setToolTip("Shortcut: Ctrl+Shift+N")
+
         ctrl_row = QHBoxLayout()
-        ctrl_row.setContentsMargins(0, 4, 0, 0)
-        ctrl_row.setSpacing(12)
+        ctrl_row.setContentsMargins(0, 0, 0, 0)
+        ctrl_row.setSpacing(6)
         ctrl_row.addWidget(self._clear_btn)
+        ctrl_row.addStretch(1)
+        ctrl_row.addWidget(self._move_btn)
+        ctrl_row.addWidget(self._toggle_btn)
         ctrl_row.addStretch(1)
         ctrl_row.addWidget(self._set_btn)
         layout.addLayout(ctrl_row)
@@ -1349,28 +1397,6 @@ class CoordWindow(QWidget):
         self._error_label.setWordWrap(True)
         self._error_label.setVisible(False)
         layout.addWidget(self._error_label)
-
-        # Bottom buttons — Overlay controls
-        self._move_btn   = self._make_button("Move Overlay")
-        self._toggle_btn = self._make_button("Hide/Show Overlay")
-
-        self._move_btn.clicked.connect(self.move_overlay)
-        self._toggle_btn.clicked.connect(self.toggle_overlay)
-        self._toggle_btn.setToolTip("Shortcut: Ctrl+Shift+N")
-
-        for btn in (self._move_btn, self._toggle_btn):
-            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-        layout.addStretch(1)
-        layout.addSpacing(4)
-        layout.addWidget(_Separator())
-        layout.addSpacing(12)
-
-        btn_grid = QGridLayout()
-        btn_grid.setSpacing(6)
-        btn_grid.addWidget(self._move_btn,   0, 0)
-        btn_grid.addWidget(self._toggle_btn, 0, 1)
-        layout.addLayout(btn_grid)
 
         self._content_stack.addWidget(page)
 

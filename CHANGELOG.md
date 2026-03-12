@@ -5,6 +5,22 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.4.10] Released — 2026-03-12
+
+### Added
+- **Integrated Application Icon**: The official ED Nav icon is now prepended to the title bar, creating a more professional, branded look.
+- **Dynamic Overlay Button**: The 'Hide overlay' button now intelligently updates to 'Show overlay' based on the window's actual visibility state, providing immediate status confirmation.
+
+### Changed
+- **Compact Window Profile**: Reduced the height of the top navigation bar and sidebar header to 40px, creating a more efficient use of screen space.
+- **Maximized 3D Viewport**: Pushed the target input section to the bottom of the window to expand the vertical space for the 3D interactive planet and placeholder assets.
+- **Refined Asset Scaling**: Optimized the 3D planet sphere size and viewport padding for a clearer, more balanced presentation within the expanded viewing area.
+- **Unified Footer Layout**: Repositioned 'Move' and 'Hide/Show' buttons inline between the 'Clear' and 'Set Target' icons, removing redundant vertical space and the old footer separator.
+- **UI Typography**: Updated button labels to sentence case (e.g., "Move overlay") and standardized font size to 9pt for a cleaner, modern interface style.
+- **Consistent Alignment**: Precision-aligned the footer button row with the sidebar's 'About' icon for improved horizontal visual flow.
+
+---
+
 ## [1.4.7] Released — 2026-03-12
 
 ### Added

@@ -96,6 +96,7 @@ def main():
         incl_overlay.setVisible(new_visible)
         _state["overlay_visible"] = new_visible
         tray.set_overlay_visible(new_visible)
+        coord_window.set_overlay_visible(new_visible)
         # If we're hiding while in move mode, exit move mode too
         if not new_visible and _state["move_mode"]:
             _exit_move_mode()
@@ -115,6 +116,7 @@ def main():
             overlay.show()
             _state["overlay_visible"] = True
             tray.set_overlay_visible(True)
+            coord_window.set_overlay_visible(True)
         overlay.enter_move_mode()
         tray.set_move_mode(True)
         coord_window.set_move_mode(True)
