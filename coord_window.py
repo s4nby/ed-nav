@@ -55,7 +55,7 @@ _TITLE_BAR_H      = 40
 _SIDEBAR_ICON_W   = 48
 _SIDEBAR_FULL_W   = 160
 _SIDEBAR_HEADER_H = 40
-_FIXED_W, _FIXED_H = 520, 678
+_FIXED_W, _FIXED_H = 460, 678
 
 from tracker import NavResult
 from journal import LandableBody
@@ -251,7 +251,7 @@ class _BookmarkDialog(QDialog):
         
         # Backdrop fills the parent window
         if parent:
-            self.resize(parent.size())
+            self.setGeometry(parent.window().geometry())
         else:
             self.setFixedSize(300, 400)
 
@@ -387,7 +387,10 @@ class _BookmarkDialog(QDialog):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # 1. Draw semi-transparent backdrop
-        p.fillRect(self.rect(), QColor(0, 0, 0, 160))
+        # We use a rounded rect to match the main app window's shape
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
+        p.fillPath(path, QColor(0, 0, 0, 160))
 
         # 2. Draw centered form box background
         box_rect = self._form_box.geometry()
@@ -811,8 +814,7 @@ class _SidebarNavItem(QWidget):
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         if self._is_checked or self._is_hovered:
-            # Inset horizontally by 1px on the right to avoid overlapping the sidebar border
-            p.fillRect(self.rect().adjusted(0, 0, -1, 0), QColor("#1e1f20"))
+            p.fillRect(self.rect(), QColor("#1e1f20"))
         bar = (
             _COL_ACTIVE if self._is_checked else
             _COL_DIM    if self._is_hovered else
@@ -1092,8 +1094,9 @@ class CoordWindow(QWidget):
     def resizeEvent(self, event):
         """Handle window resizing."""
         super().resizeEvent(event)
-        # We no longer use setMask() here because it's low-quality (aliased)
-        # and can cut into our antialiased rounded border.
+        # Sync overlay sidebar height with the body area
+        if hasattr(self, '_sidebar_panel') and hasattr(self, '_body'):
+            self._sidebar_panel.setFixedHeight(self._body.height() - 1)
 
     def _on_maximize(self) -> None:
         if self.isMaximized():
@@ -1114,14 +1117,16 @@ class CoordWindow(QWidget):
     def sidebarWidth(self, w: int) -> None:
         self._sidebar_w_cur = w
         self._sidebar_panel.setFixedWidth(w)
-        self.setFixedWidth(self._FIXED_W + w)
-        # Proportionally expand/collapse the MENU header region
-        if hasattr(self, '_sidebar_header'):
-            span = self._SIDEBAR_FULL_W - self._SIDEBAR_ICON_W
-            t    = max(0.0, min(1.0, (w - self._SIDEBAR_ICON_W) / span))
-            self._sidebar_header.setFixedHeight(int(t * self._SIDEBAR_HEADER_H))
-            self._sidebar_sep.setVisible(w > self._SIDEBAR_ICON_W)
-        # Hide labels when at icon-only width to prevent overflow
+        # Keep window width fixed; sidebar expands over content
+        if hasattr(self, '_body'):
+            self._sidebar_panel.setFixedHeight(self._body.height() - 1)
+        self._sidebar_panel.raise_()
+
+        # Update separators and labels based on expansion state
+        is_expanded = w > self._SIDEBAR_ICON_W
+        if hasattr(self, '_sidebar_sep'):
+            self._sidebar_sep.setVisible(is_expanded)
+
         if hasattr(self, '_sidebar_nav_items'):
             labels_visible = w > self._SIDEBAR_ICON_W + 20
             for item in self._sidebar_nav_items:
@@ -1208,7 +1213,7 @@ class CoordWindow(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        self._title_bar = _TitleBar("ED NAV", self)
+        self._title_bar = _TitleBar("ed-nav", self)
         self._title_bar._min_btn.clicked.connect(self.showMinimized)
         self._title_bar._max_btn.setEnabled(False)
         self._title_bar._close_btn.clicked.connect(self.hide)
@@ -1217,21 +1222,26 @@ class CoordWindow(QWidget):
 
         outer.addWidget(_Separator())
 
-        # Horizontal body: sidebar (animated width 0→_SIDEBAR_W) pushes content right
-        _body = QWidget()
-        _body.setStyleSheet("background: transparent;")
-        body_layout = QHBoxLayout(_body)
-        body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(0)
-        outer.addWidget(_body)
+        # Horizontal body container
+        self._body = QWidget()
+        self._body.setStyleSheet("background: transparent;")
+        outer.addWidget(self._body)
 
-        self._build_sidebar()                        # creates self._sidebar_panel
-        body_layout.addWidget(self._sidebar_panel)
+        # Content stack fills the area after the permanent sidebar strip
+        content_layout = QHBoxLayout(self._body)
+        # Inset by 1px to show the window's left border
+        content_layout.setContentsMargins(_SIDEBAR_ICON_W + 1, 0, 0, 0)
+        content_layout.setSpacing(0)
 
         self._content_stack = QStackedWidget()
         self._content_stack.setStyleSheet("background: transparent;")
-        self._content_stack.setFixedWidth(self._FIXED_W)
-        body_layout.addWidget(self._content_stack)
+        content_layout.addWidget(self._content_stack)
+
+        # Sidebar is added as an overlay on top of _body
+        self._build_sidebar()
+        self._sidebar_panel.setParent(self._body)
+        # Move by 1px to avoid covering the window's left border
+        self._sidebar_panel.move(1, 0)
 
         self._build_target_page()
         self._build_bookmarks_page()
@@ -1293,6 +1303,7 @@ class CoordWindow(QWidget):
 
         # Body name row: label on the left, history icon button on the right
         self._bookmark_btn = _IconButton(_NavIcon.BOOKMARKS, "Save current coordinates as a bookmark")
+        self._bookmark_btn.setEnabled(False)
         self._bookmark_btn.clicked.connect(self._on_quick_bookmark)
 
         self._random_btn = _IconButton(_NavIcon.RANDOM, "Populate with random coordinates")
@@ -1621,8 +1632,9 @@ class CoordWindow(QWidget):
         self._sidebar_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._sidebar_panel.setFixedWidth(self._SIDEBAR_ICON_W)
         self._sidebar_panel.setStyleSheet(
-            "#sidebarPanel { background: transparent;"
-            " border-right: 1px solid #363636; }"
+            "#sidebarPanel { background: #131314;"
+            " border-right: 1px solid #363636;"
+            " border-bottom-left-radius: 8px; }"
         )
 
         s_layout = QVBoxLayout(self._sidebar_panel)
@@ -1654,7 +1666,7 @@ class CoordWindow(QWidget):
         s_layout.addWidget(self._sidebar_top_row)
 
         self._sidebar_sep = _Separator()
-        self._sidebar_sep.setVisible(False)   # hidden when collapsed
+        self._sidebar_sep.setVisible(False)
         s_layout.addWidget(self._sidebar_sep)
         s_layout.addSpacing(4)
 
@@ -1714,13 +1726,13 @@ class CoordWindow(QWidget):
     def _on_sidebar_anim_finished(self) -> None:
         if not self._sidebar_open:
             self._search_btn.setVisible(False)
-            self._bookmark_search_bar.setVisible(False)
-            self._bookmark_search_bar.clear()
 
     def _sidebar_nav_select(self, page_idx: int) -> None:
         for i, item in enumerate(self._sidebar_nav_items):
             item.set_checked(i == page_idx)
         self._content_stack.setCurrentIndex(page_idx)
+        if self._sidebar_open:
+            self._close_sidebar()
 
     # ------------------------------------------------------------------
     # Event filter — Ctrl+V paste intercept on lat field
@@ -1844,8 +1856,8 @@ class CoordWindow(QWidget):
             return
 
         # Pre-fill data for the dialog
-        system = self._last_system or "Unknown System"
-        body = self._selected_body.name if self._selected_body else (self._body_name_input.text().strip() or "Unknown Body")
+        system = self._last_system or ""
+        body = self._selected_body.name if self._selected_body else (self._body_name_input.text().strip() or "")
         
         initial_data = {
             "name": "", # Leave name blank for user to input
@@ -1886,7 +1898,9 @@ class CoordWindow(QWidget):
         fields (see _try_activate_preview / eventFilter).
         """
         name = text.strip()
-        self._set_btn.setEnabled(bool(name)) # Implementation of validation
+        has_name = bool(name)
+        self._set_btn.setEnabled(has_name)
+        self._bookmark_btn.setEnabled(has_name)
 
         if not name:
             self._selected_body = None

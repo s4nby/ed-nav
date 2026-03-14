@@ -6,6 +6,7 @@
 # globe on both axes.
 
 import math
+import time
 
 from PyQt6.QtCore    import Qt, QPointF, QRectF, QTimer, pyqtSignal
 from PyQt6.QtGui     import (
@@ -18,6 +19,9 @@ _STEPS              = 90     # segments per grid line (higher = smoother arcs)
 _ANIM_INTERVAL_MS   = 16     # ~60 fps animation tick
 _FADE_DURATION_MS   = 800    # fade-in from transparent to opaque
 _AUTOROT_DEG_PER_MS = 1.5 / 1000  # 1.5°/s → one full rotation ≈ 4 min
+_MOMENTUM_FRICTION  = 0.97   # velocity multiplier per tick; half-life ≈ 370 ms
+_MAX_VEL_DEG_TICK   = 8.0    # cap to prevent wild spinning from instant flicks
+_PAUSE_THRESHOLD_MS = 80     # if user holds still this long before release, kill momentum
 
 
 class PlanetPreviewWidget(QWidget):
@@ -50,6 +54,11 @@ class PlanetPreviewWidget(QWidget):
 
         self._opacity: float = 1.0
 
+        _idle = _AUTOROT_DEG_PER_MS * _ANIM_INTERVAL_MS
+        self._vel_yaw:         float       = _idle  # deg/tick
+        self._vel_pitch:       float       = 0.0    # deg/tick
+        self._last_move_time:  float | None = None  # monotonic seconds
+
         self._anim_timer = QTimer(self)
         self._anim_timer.setInterval(_ANIM_INTERVAL_MS)
         self._anim_timer.timeout.connect(self._tick_anim)
@@ -73,6 +82,8 @@ class PlanetPreviewWidget(QWidget):
         self._unknown = unknown if active else False
         if active:
             self._opacity = 0.0
+            self._vel_yaw   = _AUTOROT_DEG_PER_MS * _ANIM_INTERVAL_MS
+            self._vel_pitch = 0.0
             self._anim_timer.start()
         else:
             self._anim_timer.stop()
@@ -86,7 +97,12 @@ class PlanetPreviewWidget(QWidget):
         if self._opacity < 1.0:
             self._opacity = min(1.0, self._opacity + _ANIM_INTERVAL_MS / _FADE_DURATION_MS)
         if self._drag_pos is None:
-            self._yaw = (self._yaw + _AUTOROT_DEG_PER_MS * _ANIM_INTERVAL_MS) % 360.0
+            idle_yaw = _AUTOROT_DEG_PER_MS * _ANIM_INTERVAL_MS
+            self._yaw   = (self._yaw + self._vel_yaw) % 360.0
+            self._pitch = max(-85.0, min(85.0, self._pitch + self._vel_pitch))
+            # Yaw decays toward idle rotation speed; pitch decays toward 0
+            self._vel_yaw   = self._vel_yaw   * _MOMENTUM_FRICTION + idle_yaw * (1.0 - _MOMENTUM_FRICTION)
+            self._vel_pitch = self._vel_pitch * _MOMENTUM_FRICTION
         self.update()
 
     def set_target(self, lat: float | None, lon: float | None) -> None:
@@ -98,6 +114,8 @@ class PlanetPreviewWidget(QWidget):
         """Orient the sphere so the given coordinate faces the viewer."""
         self._yaw   = (-center_lon) % 360
         self._pitch = max(-60.0, min(60.0, center_lat * 0.6))
+        self._vel_yaw   = _AUTOROT_DEG_PER_MS * _ANIM_INTERVAL_MS
+        self._vel_pitch = 0.0
         self.update()
 
     # ------------------------------------------------------------------
@@ -108,8 +126,9 @@ class PlanetPreviewWidget(QWidget):
         if not self._active:
             return
         if event.button() == Qt.MouseButton.LeftButton:
-            self._press_pos = event.pos()
-            self._drag_pos  = event.pos()
+            self._press_pos      = event.pos()
+            self._drag_pos       = event.pos()
+            self._last_move_time = None   # fresh slate for velocity measurement
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseReleaseEvent(self, event):
@@ -119,19 +138,42 @@ class PlanetPreviewWidget(QWidget):
             if self._press_pos is not None:
                 delta = event.pos() - self._press_pos
                 if delta.manhattanLength() < 5:
+                    # Click (no drag) — reset to idle, then pick coordinate
+                    self._vel_yaw   = _AUTOROT_DEG_PER_MS * _ANIM_INTERVAL_MS
+                    self._vel_pitch = 0.0
                     result = self._inverse_project(event.pos().x(), event.pos().y())
                     if result is not None:
                         self.coord_picked.emit(*result)
-            self._drag_pos  = None
-            self._press_pos = None
+                else:
+                    # Flick gesture — but kill momentum if user paused before releasing
+                    if self._last_move_time is not None:
+                        dt_ms = (time.monotonic() - self._last_move_time) * 1000.0
+                        if dt_ms > _PAUSE_THRESHOLD_MS:
+                            self._vel_yaw   = _AUTOROT_DEG_PER_MS * _ANIM_INTERVAL_MS
+                            self._vel_pitch = 0.0
+            self._drag_pos       = None
+            self._press_pos      = None
+            self._last_move_time = None
             self.setCursor(Qt.CursorShape.OpenHandCursor)
 
     def mouseMoveEvent(self, event):
         if not self._active:
             return
         if self._drag_pos is not None:
-            delta          = event.pos() - self._drag_pos
-            self._drag_pos = event.pos()
+            now   = time.monotonic()
+            delta = event.pos() - self._drag_pos
+
+            if self._last_move_time is not None:
+                dt_ms = (now - self._last_move_time) * 1000.0
+                if dt_ms >= 4.0:    # ignore sub-4 ms bursts to avoid division noise
+                    scale = _ANIM_INTERVAL_MS / dt_ms
+                    raw_vy = delta.x() * 0.5 * scale
+                    raw_vp = delta.y() * 0.5 * scale
+                    self._vel_yaw   = max(-_MAX_VEL_DEG_TICK, min(_MAX_VEL_DEG_TICK, raw_vy))
+                    self._vel_pitch = max(-_MAX_VEL_DEG_TICK, min(_MAX_VEL_DEG_TICK, raw_vp))
+
+            self._last_move_time = now
+            self._drag_pos       = event.pos()
             self._yaw   = (self._yaw + delta.x() * 0.5) % 360
             self._pitch = max(-85.0, min(85.0, self._pitch + delta.y() * 0.5))
             self.update()
@@ -145,7 +187,8 @@ class PlanetPreviewWidget(QWidget):
         label_h  = 28
         sphere_h = h - label_h
         cx, cy   = w / 2.0, sphere_h / 2.0
-        R        = min(w, sphere_h) / 2.0 - 40.0
+        # Reduce the radius by 15% from its previous base (min/2 - 20)
+        R        = (min(w, sphere_h) / 2.0 - 20.0) * 0.85
 
         x_ndc = (px - cx) / R
         y_ndc = (cy - py) / R
@@ -182,7 +225,8 @@ class PlanetPreviewWidget(QWidget):
         label_h  = 28
         sphere_h = h - label_h
         cx, cy   = w / 2.0, sphere_h / 2.0
-        R        = min(w, sphere_h) / 2.0 - 20.0
+        # Reduce the radius by 15% from its previous base (min/2 - 20)
+        R        = (min(w, sphere_h) / 2.0 - 20.0) * 0.85
 
         if not self._active:
             _draw_placeholder(p, cx, cy, R)
