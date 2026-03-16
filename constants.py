@@ -6,7 +6,7 @@ import os
 # ---------------------------------------------------------------------------
 # App version & update feed
 # ---------------------------------------------------------------------------
-VERSION     = "1.5.0"
+VERSION     = "1.5.3"
 GITHUB_REPO = "s4nby/ed-nav"
 
 # ---------------------------------------------------------------------------
@@ -40,9 +40,9 @@ COLOR_ERROR      = "#FF3300"
 # ---------------------------------------------------------------------------
 # Opacity / alpha (0–255)
 # ---------------------------------------------------------------------------
-NEEDLE_ALPHA     = 230   # forward triangle
-NEEDLE_TAIL_ALPHA = 70   # rear triangle
-TEXT_ALPHA       = 210
+NEEDLE_ALPHA      = 230   # forward triangle
+NEEDLE_TAIL_ALPHA = 70    # rear triangle
+TEXT_ALPHA        = 210
 
 # ---------------------------------------------------------------------------
 # Needle geometry (pixels)
@@ -56,7 +56,6 @@ NEEDLE_HALF_W    = 6     # half-width at the base
 # ---------------------------------------------------------------------------
 RENDER_FPS           = 30
 RENDER_INTERVAL_MS   = 1000 // RENDER_FPS   # ~33 ms
-MAX_ROTATE_PER_FRAME = 25.0                 # degrees/frame
 PULSE_SPEED          = 0.08                 # arrival pulse (radians/frame)
 
 # ---------------------------------------------------------------------------

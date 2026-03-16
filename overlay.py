@@ -1,9 +1,14 @@
 # overlay.py
-# Minimal compass-needle overlay.
-# Draws only when actively tracking: a slim needle pointing at the target
-# (relative to player heading) and a distance readout below it.
-# Invisible (fully transparent) when there is no target or no GPS signal.
-# Always click-through (WS_EX_TRANSPARENT) except when in move mode.
+# Compass-needle overlay (OverlayWindow) and inclination overlay
+# (InclinationOverlay) for surface navigation in Elite Dangerous.
+#
+# OverlayWindow:      always-on-top, click-through needle canvas + distance.
+# InclinationOverlay: independent click-through chevron pitch-correction cue.
+#
+# The navigation target (lat/lon/radius/body/system) is locked inside
+# GameTracker the moment the player confirms a destination; the journal file
+# only feeds system-mismatch warnings and UI helpers after that point —
+# it never alters the stored target.
 
 import ctypes
 import math
@@ -22,7 +27,6 @@ from constants import (
     COLOR_ORANGE, COLOR_ERROR,
     FONT_FAMILY, FONT_SIZE_DIST,
     RENDER_INTERVAL_MS,
-    MAX_ROTATE_PER_FRAME,
     PULSE_SPEED,
     ARRIVAL_DISTANCE_M,
     PROXIMITY_DISTANCE_M, PROXIMITY_EXIT_M,
@@ -35,11 +39,22 @@ from tracker import NavResult, shortest_arc
 # Needle color thresholds (bearing error in degrees)
 _BEARING_BLUE_THRESH   = 10.0   # ≤ 10° off → blue (on track)
 _BEARING_ORANGE_THRESH = 45.0   # ≤ 45° off → orange (slightly off)
-# > 45° → red (way off)
+# > 45° → red
 _COLOR_BLUE = "#4499FF"
 
 _SPEED_SCALE_MAX = 80.0    # m/s at which the tail reaches maximum elongation
 _NEEDLE_SCALE    = 1.15    # needle geometry multiplier (slightly larger than base)
+
+# Spring-damper parameters for needle rotation
+# Models a critically-damped instrument needle: fast initial response,
+# smooth deceleration, natural settle — no harsh constant-rate clamping.
+#   ω₀  natural frequency (units: 1/s in the degrees domain)
+#       higher → snappier response; 6 ≈ 0.75 s settling time from any angle
+#   ζ   damping ratio  1.0 = no overshoot (critically damped)
+#                      0.9 = ~2 % overshoot — barely visible, feels authentic
+_NEEDLE_OMEGA = 6.0   # 1/s
+_NEEDLE_ZETA  = 0.9
+_NEEDLE_DT    = RENDER_INTERVAL_MS / 1000.0   # seconds per frame (≈ 0.0333 s)
 
 # Heading deadzone — forbidden relative-bearing ranges (0–360° representation)
 # Global:          -60° to -90°  →  270° to 300°
@@ -71,8 +86,9 @@ class OverlayCanvas(QWidget):
         super().__init__(parent)
         self.setMouseTracking(True)
 
-        self._display_angle: float = 0.0
-        self._speed_scale:   float = 1.0   # tail length multiplier from speed
+        self._display_angle:    float = 0.0
+        self._angular_velocity: float = 0.0   # degrees/second — spring-damper state
+        self._speed_scale:      float = 1.0   # tail length multiplier from speed
         self._pulse_phase:   float = 0.0
         self._idle_phase:    float = 0.0
         self._last_target_epoch: int = 0
@@ -241,7 +257,7 @@ class OverlayCanvas(QWidget):
             self._last_valid_distance_m  = None
             self._last_valid_rel_bearing = None
 
-        # ── Bearing tracking (clamped rate, snap on new target) ───────
+        # ── Bearing tracking (spring-damper, snap on new target) ─────
         # Skip when the player's GPS fix is on a different body than the target —
         # the bearing would be computed across mismatched coordinate spaces.
         if (nav.relative_bearing is not None
@@ -249,13 +265,27 @@ class OverlayCanvas(QWidget):
                 and not self._in_deadzone
                 and not nav.body_mismatch):
             if nav.target_epoch != self._last_target_epoch:
-                # New target set — snap immediately instead of animating
-                self._display_angle      = nav.relative_bearing
-                self._last_target_epoch  = nav.target_epoch
+                # New target — snap to bearing and clear momentum so the spring
+                # starts fresh rather than carrying over stale velocity.
+                self._display_angle     = nav.relative_bearing
+                self._angular_velocity  = 0.0
+                self._last_target_epoch = nav.target_epoch
             else:
-                err  = shortest_arc(self._display_angle, nav.relative_bearing)
-                step = max(-MAX_ROTATE_PER_FRAME, min(MAX_ROTATE_PER_FRAME, err))
-                self._display_angle = (self._display_angle + step) % 360.0
+                # Spring-damper: acceleration proportional to angular error,
+                # minus a damping term proportional to current angular velocity.
+                # Result: fast initial response, smooth natural deceleration,
+                # tiny overshoot (ζ < 1) that reads as instrument authenticity.
+                err   = shortest_arc(self._display_angle, nav.relative_bearing)
+                accel = (_NEEDLE_OMEGA ** 2 * err
+                         - 2.0 * _NEEDLE_ZETA * _NEEDLE_OMEGA * self._angular_velocity)
+                self._angular_velocity  += accel * _NEEDLE_DT
+                self._display_angle      = (self._display_angle
+                                            + self._angular_velocity * _NEEDLE_DT) % 360.0
+        else:
+            # Needle is not being tracked (deadzone, no GPS, proximity, etc.).
+            # Bleed velocity to zero so no stale momentum bleeds into the next
+            # tracking window.
+            self._angular_velocity = 0.0
 
         # ── Clear pending-approach once a valid bearing is confirmed ───
         if (nav.has_lat_long and not nav.body_mismatch
@@ -896,3 +926,4 @@ class InclinationOverlay(QWidget):
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
         except Exception:
             pass
+

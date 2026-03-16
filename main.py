@@ -15,6 +15,13 @@
 #   • Tray "Open Settings" → show CoordWindow
 #   • CoordWindow Set/Clear → update tracker target
 #   • nav_timer (300ms) → push NavResult to overlay + CoordWindow
+#
+# Primary interactions:
+#   • Ctrl+Shift+N / tray left-click / tray "Hide/Show Overlay" → toggle overlay
+#   • Tray "Move Overlay" → drag mode; "Done Moving" → exit drag mode
+#   • Tray "Open Settings" → show CoordWindow
+#   • CoordWindow Set/Clear → update tracker target
+#   • nav_timer (300ms) → push NavResult to overlay + CoordWindow
 
 import ctypes
 import sys
