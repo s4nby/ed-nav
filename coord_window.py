@@ -11,7 +11,6 @@
 import json
 import random
 import re
-import webbrowser
 from typing import Optional
 
 from PyQt6.QtCore    import QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSettings, QSize, Qt, QTimer, pyqtProperty, pyqtSignal
@@ -1040,6 +1039,7 @@ class CoordWindow(QWidget):
     target_cleared = pyqtSignal()
     move_overlay   = pyqtSignal()
     toggle_overlay = pyqtSignal()
+    apply_update   = pyqtSignal(str, str)  # (version, path_to_new_exe)
 
     # UI constants (referenced from top-level style section)
     _TITLE_BAR_H      = _TITLE_BAR_H
@@ -1098,17 +1098,6 @@ class CoordWindow(QWidget):
         if hasattr(self, '_sidebar_panel') and hasattr(self, '_body'):
             self._sidebar_panel.setFixedHeight(self._body.height() - 1)
 
-    def _on_maximize(self) -> None:
-        if self.isMaximized():
-            self.showNormal()
-            self.setFixedSize(self._FIXED_W + self._SIDEBAR_ICON_W, self._FIXED_H)
-            self._title_bar._max_btn.setText("\u25a1")   # □
-        else:
-            self.setMinimumSize(0, 0)
-            self.setMaximumSize(16777215, 16777215)
-            self.showMaximized()
-            self._title_bar._max_btn.setText("\u25a0")   # ■ (filled = restored)
-
     @pyqtProperty(int)
     def sidebarWidth(self) -> int:
         return self._sidebar_w_cur
@@ -1143,11 +1132,22 @@ class CoordWindow(QWidget):
         """Update the toggle button text based on overlay visibility."""
         self._toggle_btn.setText("Hide overlay" if visible else "Show overlay")
 
-    def show_update(self, version: str, url: str) -> None:
-        """Display the update notification in the title bar."""
-        self._update_url = url
+    def show_update_available(self, version: str) -> None:
+        """Show the update button in a 'downloading' state."""
+        self._update_version = version
+        self._update_new_exe: str | None = None
         self._title_bar._update_btn.setVisible(True)
-        self._title_bar._update_btn.setToolTip(f"Update available (v{version})! Click to download.")
+        self._title_bar._update_btn.setToolTip(
+            f"v{version} available — downloading..."
+        )
+
+    def show_update_ready(self, version: str, new_exe_path: str) -> None:
+        """Update is downloaded; prompt the user to restart."""
+        self._update_version = version
+        self._update_new_exe = new_exe_path
+        self._title_bar._update_btn.setToolTip(
+            f"v{version} ready — click to restart and update"
+        )
 
 
     def update_status(self, nav: NavResult, has_target: bool) -> None:
@@ -1805,29 +1805,6 @@ class CoordWindow(QWidget):
         lon = _validate_coord(self._lon_input.text(), -180.0, 180.0)
         self._planet_preview.set_target(lat, lon)
 
-    def _fit_to_header(self) -> None:
-        """Resize window width to exactly fit the header row, snapping instantly."""
-        m = self.layout().contentsMargins()
-        h_margins = m.left() + m.right()
-
-        name_w  = QFontMetrics(self._planet_name_label.font()).horizontalAdvance(
-            self._planet_name_label.text()
-        ) + 16   # button horizontal padding (2×4px stylesheet + 4px buffer)
-        count_w = QFontMetrics(self._body_count_label.font()).horizontalAdvance(
-            self._body_count_label.text()
-        ) + 8
-
-        target_w = max(self.minimumWidth(), name_w + count_w + h_margins + 6)
-        if target_w != self.width():
-            self.resize(target_w, self.height())
-
-    @staticmethod
-    def _try_parse_float(text: str) -> float | None:
-        try:
-            return float(text.strip())
-        except ValueError:
-            return None
-
     def _show_error(self, msg: str) -> None:
         self._error_label.setStyleSheet(f"background: transparent; color: {COLOR_ERROR};")
         self._error_label.setText(msg)
@@ -1887,9 +1864,9 @@ class CoordWindow(QWidget):
         self._update_preview_marker()
 
     def _on_update_clicked(self) -> None:
-        """Open the release URL in the system browser."""
-        if hasattr(self, '_update_url'):
-            webbrowser.open(self._update_url)
+        """Apply the update if the download is ready; ignore if still downloading."""
+        if getattr(self, "_update_new_exe", None):
+            self.apply_update.emit(self._update_version, self._update_new_exe)
 
     def _on_body_name_changed(self, text: str) -> None:
         """Track body selection state as the user types; preview is not shown yet.

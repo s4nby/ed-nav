@@ -698,25 +698,6 @@ class OverlayWindow(QWidget):
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
-    # Position persistence (kept for future use)
-    # ------------------------------------------------------------------
-
-    def _save_position(self) -> None:
-        s = QSettings(self._SETTINGS_ORG, self._SETTINGS_APP)
-        s.setValue("overlay/x", self.x())
-        s.setValue("overlay/y", self.y())
-
-    def _restore_position(self) -> None:
-        s = QSettings(self._SETTINGS_ORG, self._SETTINGS_APP)
-        x = s.value("overlay/x", None)
-        y = s.value("overlay/y", None)
-        if x is not None and y is not None:
-            try:
-                self.move(int(x), int(y))
-            except (ValueError, TypeError):
-                pass
-
 
 # ---------------------------------------------------------------------------
 # Inclination overlay — independent window for the chevron pitch-correction cue

@@ -6,7 +6,7 @@ import os
 # ---------------------------------------------------------------------------
 # App version & update feed
 # ---------------------------------------------------------------------------
-VERSION     = "1.5.3"
+VERSION     = "1.6.0"
 GITHUB_REPO = "s4nby/ed-nav"
 
 # ---------------------------------------------------------------------------
@@ -23,7 +23,8 @@ STATUS_JSON_PATH = os.path.join(JOURNAL_DIR, "Status.json")
 # ---------------------------------------------------------------------------
 # Polling
 # ---------------------------------------------------------------------------
-POLL_INTERVAL_MS = 100          # Status.json polling interval (milliseconds)
+POLL_INTERVAL_MS        = 100   # Status.json polling interval (milliseconds)
+STATUS_STALE_THRESHOLD_S = 10   # seconds before Status.json is considered stale (game not running)
 
 # ---------------------------------------------------------------------------
 # Window geometry

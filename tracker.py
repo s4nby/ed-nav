@@ -5,8 +5,6 @@
 # Thread-safe: GameTracker runs a background polling thread and exposes
 # state via properties protected by a threading.Lock.
 
-import ctypes
-import ctypes.wintypes as _wt
 import datetime
 import json
 import math
@@ -20,6 +18,7 @@ from constants import (
     POLL_INTERVAL_MS,
     DEFAULT_PLANET_RADIUS_M,
     ARRIVAL_DISTANCE_M,
+    STATUS_STALE_THRESHOLD_S,
 )
 
 # ---------------------------------------------------------------------------
@@ -31,47 +30,20 @@ FLAG_ALTITUDE_FROM_AVG_RADIUS  = 0x20000000  # bit 29 — AltitudeFromAverageRad
 
 
 # ---------------------------------------------------------------------------
-# Win32 process presence check
+# Game presence check via Status.json freshness
 # ---------------------------------------------------------------------------
 
-class _PROCESSENTRY32(ctypes.Structure):
-    _fields_ = [
-        ("dwSize",              _wt.DWORD),
-        ("cntUsage",            _wt.DWORD),
-        ("th32ProcessID",       _wt.DWORD),
-        ("th32DefaultHeapID",   ctypes.POINTER(ctypes.c_ulong)),
-        ("th32ModuleID",        _wt.DWORD),
-        ("cntThreads",          _wt.DWORD),
-        ("th32ParentProcessID", _wt.DWORD),
-        ("pcPriClassBase",      ctypes.c_long),
-        ("dwFlags",             _wt.DWORD),
-        ("szExeFile",           ctypes.c_char * 260),
-    ]
+def _is_status_fresh(path: str) -> bool:
+    """Return True if Status.json was modified within the staleness threshold.
 
-_ED_EXE = b"EliteDangerous64.exe"
-
-
-def _is_ed_running() -> bool:
-    """Return True if EliteDangerous64.exe is present in the process list."""
+    Elite Dangerous rewrites Status.json roughly every second while running.
+    A stale file reliably indicates the game is not running, with no need for
+    process enumeration.
+    """
     try:
-        kernel32 = ctypes.windll.kernel32
-        snap = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
-        if snap == ctypes.wintypes.HANDLE(-1).value:
-            return True  # Can't enumerate; assume running to avoid false negatives
-        entry = _PROCESSENTRY32()
-        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32)
-        found = False
-        if kernel32.Process32First(snap, ctypes.byref(entry)):
-            while True:
-                if entry.szExeFile == _ED_EXE:
-                    found = True
-                    break
-                if not kernel32.Process32Next(snap, ctypes.byref(entry)):
-                    break
-        kernel32.CloseHandle(snap)
-        return found
-    except Exception:
-        return True  # Fail-safe: don't hide overlay if check errors
+        return (time.time() - os.path.getmtime(path)) < STATUS_STALE_THRESHOLD_S
+    except OSError:
+        return False
 
 
 class PlayerState:
@@ -398,7 +370,7 @@ class GameTracker:
     def _poll_loop(self) -> None:
         interval_s = POLL_INTERVAL_MS / 1000.0
         poll_count = 0
-        ed_running = _is_ed_running()  # check immediately on start
+        ed_running = _is_status_fresh(STATUS_JSON_PATH)  # check immediately on start
 
         # Local-only variables for vertical speed tracking (no lock needed)
         prev_altitude:   Optional[float] = None
@@ -410,7 +382,7 @@ class GameTracker:
             poll_count += 1
             if poll_count >= 30:        # re-check process every ~3 s
                 poll_count = 0
-                ed_running = _is_ed_running()
+                ed_running = _is_status_fresh(STATUS_JSON_PATH)
 
             # Compute vertical speed from altitude delta
             vspeed: Optional[float] = None

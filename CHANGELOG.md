@@ -5,6 +5,24 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.6.0] Released — 2026-03-17
+
+### Added
+- **In-App Updates**: The application now downloads new releases silently in the background. When a update is ready, clicking the update button in the title bar restarts and applies it automatically — no browser redirect required.
+- **PE Version Metadata**: The Windows executable now embeds `FileVersion` and `ProductVersion` in its PE header, visible in Windows file properties and to security scanners.
+
+### Changed
+- **Stable Executable Naming**: The release binary is now always named `ed_navigator.exe` across all versions. Version is tracked via embedded PE metadata instead of the filename, allowing AV engines to accumulate reputation against a consistent identifier.
+- **Game Detection**: Replaced Win32 `CreateToolhelp32Snapshot` process enumeration with a `Status.json` file-freshness check. Elite Dangerous writes this file every ~1 second while running; a stale file reliably indicates the game is closed. This removes a heuristic false-positive trigger.
+- **Update Check Timing**: The GitHub version check is now deferred 45 seconds after launch. Immediate outbound network connections on startup are a known heuristic AV signal.
+
+### Fixed
+- Removed unused `QUrl` and `QDesktopServices` imports from `main.py`.
+- Removed dead `_save_position` / `_restore_position` methods from `overlay.py`.
+- Removed dead `_on_maximize`, `_fit_to_header`, and `_try_parse_float` methods from `coord_window.py`.
+
+---
+
 ## [1.4.10] Released — 2026-03-12
 
 ### Added

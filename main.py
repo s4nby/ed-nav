@@ -9,25 +9,13 @@
 #   ├── GlobalHotkey  (hidden QWidget owning the Win32 hotkey HWND)
 #   └── TrayIcon      (system tray)
 #
-# Primary interactions:
-#   • Ctrl+Shift+N / tray left-click / tray "Hide/Show Overlay" → toggle overlay
-#   • Tray "Move Overlay" → drag mode; "Done Moving" → exit drag mode
-#   • Tray "Open Settings" → show CoordWindow
-#   • CoordWindow Set/Clear → update tracker target
-#   • nav_timer (300ms) → push NavResult to overlay + CoordWindow
-#
-# Primary interactions:
-#   • Ctrl+Shift+N / tray left-click / tray "Hide/Show Overlay" → toggle overlay
-#   • Tray "Move Overlay" → drag mode; "Done Moving" → exit drag mode
-#   • Tray "Open Settings" → show CoordWindow
-#   • CoordWindow Set/Clear → update tracker target
-#   • nav_timer (300ms) → push NavResult to overlay + CoordWindow
 
 import ctypes
+import os
+import subprocess
 import sys
 
-from PyQt6.QtCore    import QSettings, QTimer, QUrl
-from PyQt6.QtGui     import QDesktopServices
+from PyQt6.QtCore    import QSettings, QTimer
 from PyQt6.QtWidgets import QApplication
 
 from coord_window import CoordWindow
@@ -40,7 +28,21 @@ from updater      import UpdateChecker
 from constants    import POLL_INTERVAL_MS, VERSION, GITHUB_REPO
 
 
+def _cleanup_old_exe() -> None:
+    """Remove ed_navigator.old left behind by a previous in-app update."""
+    if not getattr(sys, "frozen", False):
+        return
+    old_path = os.path.join(os.path.dirname(sys.executable), "ed_navigator.old")
+    try:
+        if os.path.exists(old_path):
+            os.remove(old_path)
+    except OSError:
+        pass
+
+
 def main():
+    _cleanup_old_exe()
+
     # Give this process its own App User Model ID so Windows uses the
     # Qt window icon for the taskbar button instead of python.exe's icon.
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ED.Navigator.App")
@@ -136,12 +138,37 @@ def main():
         _state["move_mode"] = False
 
     # ------------------------------------------------------------------
+    # In-app update apply
+    # ------------------------------------------------------------------
+    def _do_apply_update(version: str, new_exe_path: str) -> None:
+        """Swap in the downloaded exe and relaunch. No-op outside frozen build."""
+        if not getattr(sys, "frozen", False):
+            return
+        exe_path = sys.executable
+        old_path = os.path.join(os.path.dirname(exe_path), "ed_navigator.old")
+        try:
+            _on_quit()
+            if os.path.exists(old_path):
+                os.remove(old_path)
+            os.rename(exe_path, old_path)
+            os.rename(new_exe_path, exe_path)
+            subprocess.Popen([exe_path])
+            sys.exit(0)
+        except Exception:
+            # Rollback: restore original exe so the app stays functional.
+            try:
+                if not os.path.exists(exe_path) and os.path.exists(old_path):
+                    os.rename(old_path, exe_path)
+            except OSError:
+                pass
+
+    # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
     # Update checker
-    # ------------------------------------------------------------------
-    updater.update_available.connect(coord_window.show_update)
+    updater.update_available.connect(coord_window.show_update_available)
+    updater.update_ready.connect(coord_window.show_update_ready)
+    coord_window.apply_update.connect(_do_apply_update)
     updater.start()
 
     hotkey.activated.connect(_toggle_overlay)
