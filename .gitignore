@@ -15,8 +15,9 @@ _version_info.txt
 Thumbs.db
 Desktop.ini
 
-# Claude Code session data
+# Claude Code
 .claude/
+CLAUDE.md
 
 # Misc
 *.pdf
