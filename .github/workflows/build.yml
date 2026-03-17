@@ -14,10 +14,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: "3.12"
 
@@ -29,16 +29,14 @@ jobs:
 
       - name: Compute SHA256
         run: |
-          $tag = "${{ github.ref_name }}"
-          $version = $tag.TrimStart("v")
-          $exe = "dist\ed_navigator_v$version.exe"
+          $exe = "dist\ed_navigator.exe"
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash
-          "$exe  $hash" | Out-File -FilePath "dist\ed_navigator_v$version.exe.sha256.txt" -Encoding utf8
+          "$exe  $hash" | Out-File -FilePath "dist\ed_navigator.exe.sha256.txt" -Encoding utf8
         shell: pwsh
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/ed_navigator_v*.exe
-            dist/ed_navigator_v*.exe.sha256.txt
+            dist/ed_navigator.exe
+            dist/ed_navigator.exe.sha256.txt
