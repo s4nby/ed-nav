@@ -26,8 +26,8 @@ game memory.
 - **3D globe preview** — drag to rotate, click to drop a coordinate marker directly on the planet surface
 - **Smart paste** — paste `Lat: -22.45 / Lon: 137.88` strings from POI tools and both fields fill at once
 - **Global hotkey** — `Ctrl+Shift+N` toggles the overlay without leaving the game
-- **Auto-updater** — checks GitHub Releases on startup and shows a tray notification when a new version is available
-- **Zero footprint** — read-only access to two local files; no network calls during play, no telemetry
+- **Auto-updater** — checks GitHub Releases 45 seconds after launch, downloads the update silently in the background, and prompts you to restart with a single click in the settings window title bar
+- **Zero footprint** — read-only access to two local files; no telemetry
 
 ---
 
@@ -109,7 +109,7 @@ locked). Click **Done Moving** in the settings window when finished.
 
 ```bash
 pyinstaller build.spec
-# Output: dist\EDNavigator.exe
+# Output: dist\ed_navigator.exe
 ```
 
 The single-file executable requires no Python installation on the target machine.
@@ -123,7 +123,7 @@ ED Surface Navigator is **read-only**. It:
 
 - Reads only `%USERPROFILE%\Saved Games\Frontier Developments\Elite Dangerous\Status.json` and `Journal.*.log`
 - Does **not** access game memory, inject code, or modify any game file
-- Makes one HTTPS request at startup to check for updates (GitHub Releases API); no data is sent
+- Makes HTTPS requests to the GitHub Releases API (version check, then asset download if an update is found), deferred 45 seconds after launch; no data is sent
 - Is not affiliated with Frontier Developments plc
 
 Use is consistent with Frontier's player-tool policies for read-only journal access.
@@ -145,7 +145,7 @@ The source is split into single-responsibility modules:
 | `planet_preview.py` | Interactive 3D globe with orthographic projection |
 | `tray.py` | System tray icon and context menu |
 | `hotkey.py` | Win32 global hotkey registration |
-| `updater.py` | GitHub Releases version check |
+| `updater.py` | GitHub Releases version check, background download, and silent in-place update |
 
 See [CLAUDE.md](CLAUDE.md) for the full data-flow diagram and architectural notes.
 
