@@ -26,40 +26,159 @@ from constants import (
     COLOR_ERROR, COLOR_ORANGE,
     DEFAULT_PLANET_RADIUS_M,
     FONT_FAMILY,
+    GITHUB_REPO,
     VERSION,
 )
 
 # ---------------------------------------------------------------------------
 # Coord-window local style constants (ED-style theme)
 # ---------------------------------------------------------------------------
-_FONT        = "Agency FB"   # condensed geometric — closest Windows built-in to ED's UI font
+_FONT        = "Segoe UI"    # Windows-native sans-serif — clean, professional
 _FONT_MONO   = "Consolas"    # used for coordinate inputs so numbers stay aligned
 
-_SZ_TITLE    = 14   # "SET TARGET" header
-_SZ_LABEL    = 11   # field labels (BODY NAME, LATITUDE…)
-_SZ_HINT     = 10   # hint / FSS hint text
-_SZ_INPUT    = 11   # line-edit content
-_SZ_STATUS   = 10   # status line
-_SZ_BTN      = 11   # button text
+_SZ_TITLE    = 12   # "SET TARGET" header
+_SZ_LABEL    = 10   # field labels (BODY NAME, LATITUDE…)
+_SZ_HINT     = 9    # hint / FSS hint text
+_SZ_INPUT    = 10   # line-edit content
+_SZ_STATUS   = 9    # status line
+_SZ_BTN      = 10   # button text
 
 # Orange palette — three tiers matching ED's UI hierarchy
 _COL_ACTIVE  = "#FF8C00"   # bright — title, active elements
 _COL_LABEL   = "#CC6600"   # mid    — field labels, button borders
 _COL_DIM     = "#7A3D00"   # dim    — hints, inactive text
-_COL_INPUT_BG = "#1e1f20"  # input background
-_COL_BORDER  = "#363636"   # global border color
+_COL_INPUT_BG = "#161616"  # input background
+_COL_BORDER  = "#3D3D3D"   # global border color
 
 # UI Dimensions
-_TITLE_BAR_H      = 40
+_TITLE_BAR_H      = 34
 _SIDEBAR_ICON_W   = 48
 _SIDEBAR_FULL_W   = 160
-_SIDEBAR_HEADER_H = 40
-_FIXED_W, _FIXED_H = 460, 678
+_SIDEBAR_HEADER_H = 34
+_FIXED_W, _FIXED_H = 560, 678
 
 from tracker import NavResult
 from journal import LandableBody
 from planet_preview import PlanetPreviewWidget
 from tray import TrayIcon
+
+# ---------------------------------------------------------------------------
+# Animated app-icon button (sidebar toggle trigger)
+# ---------------------------------------------------------------------------
+
+class _AppIconButton(QWidget):
+    """
+    Shows the app icon at rest.  On hover, crossfades to a directional chevron
+    that previews the *resulting* sidebar state (expand ▶ or collapse ◀).
+    Clicking emits `clicked`.
+    """
+
+    clicked = pyqtSignal()
+
+    _SZ = 18   # matches the QLabel it replaces
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self._SZ, self._SZ)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+        self._sidebar_open  = False
+        self._blend_val     = 0.0      # 0 = app icon, 1 = hint icon
+        self._forced_hover  = False    # True when the title bar (parent) is hovered
+
+        self._app_px = TrayIcon._make_icon().pixmap(self._SZ, self._SZ)
+
+        self._anim = QPropertyAnimation(self, b"blend")
+        self._anim.setDuration(160)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    # ---- pyqtProperty (animatable) ----------------------------------------
+
+    @pyqtProperty(float)
+    def blend(self) -> float:
+        return self._blend_val
+
+    @blend.setter
+    def blend(self, v: float) -> None:
+        self._blend_val = v
+        self.update()
+
+    # ---- public API -------------------------------------------------------
+
+    def set_sidebar_open(self, open: bool) -> None:
+        self._sidebar_open = open
+        if self._blend_val > 0.0:   # already showing hint — redraw immediately
+            self.update()
+
+    def set_forced_hover(self, forced: bool) -> None:
+        """Called by the parent title bar to drive the hover state from a wider trigger area."""
+        self._forced_hover = forced
+        self._anim.stop()
+        self._anim.setStartValue(self._blend_val)
+        self._anim.setEndValue(1.0 if forced else 0.0)
+        self._anim.start()
+
+    # ---- hover ------------------------------------------------------------
+
+    def enterEvent(self, event) -> None:
+        self._anim.stop()
+        self._anim.setStartValue(self._blend_val)
+        self._anim.setEndValue(1.0)
+        self._anim.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if not self._forced_hover:
+            self._anim.stop()
+            self._anim.setStartValue(self._blend_val)
+            self._anim.setEndValue(0.0)
+            self._anim.start()
+        super().leaveEvent(event)
+
+    # ---- click ------------------------------------------------------------
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+    # ---- paint ------------------------------------------------------------
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if self._blend_val < 1.0:
+            p.setOpacity(1.0 - self._blend_val)
+            p.drawPixmap(0, 0, self._app_px)
+
+        if self._blend_val > 0.0:
+            p.setOpacity(self._blend_val)
+            self._draw_hint(p)
+
+        p.end()
+
+    def _draw_hint(self, p: QPainter) -> None:
+        """Chevron + vertical bar indicating the action that will be performed."""
+        pen = QPen(QColor(_COL_ACTIVE), 1.5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # Vertical bar on the left edge
+        p.drawLine(QPointF(3, 3), QPointF(3, 15))
+
+        if self._sidebar_open:
+            # Sidebar is open → hint: collapse (chevron points LEFT ‹)
+            p.drawLine(QPointF(13, 4), QPointF(7,  9))
+            p.drawLine(QPointF(7,  9), QPointF(13, 14))
+        else:
+            # Sidebar is closed → hint: expand (chevron points RIGHT ›)
+            p.drawLine(QPointF(7,  4), QPointF(13, 9))
+            p.drawLine(QPointF(13, 9), QPointF(7,  14))
+
 
 # ---------------------------------------------------------------------------
 # Custom title bar
@@ -69,60 +188,66 @@ class _TitleBar(QWidget):
     """Draggable title bar with centered app name and window controls."""
 
     update_clicked = pyqtSignal()
+    icon_clicked   = pyqtSignal()
 
     def __init__(self, title: str, parent: QWidget | None = None):
         super().__init__(parent)
         self.setFixedHeight(_TITLE_BAR_H)
-        # Transparent background so it shows the parent's rounded corners
-        self.setStyleSheet("background: transparent;")
+        self.setStyleSheet(
+            f"background: #202020;"
+            f" border: none;"
+            f" border-top: 1px solid {_COL_BORDER};"
+            f" border-left: 1px solid {_COL_BORDER};"
+            f" border-right: 1px solid {_COL_BORDER};"
+            f" border-top-left-radius: 10px;"
+            f" border-top-right-radius: 10px;"
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._drag_pos: QPoint | None = None
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 0, 6, 0)
+        layout.setContentsMargins(10, 0, 4, 0)
         layout.setSpacing(0)
         layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Button stylesheets
+        # Windows 11-style caption buttons and icon sizing.
         _btn_ss = (
             f"QPushButton {{ background: transparent; border: none;"
-            f" color: {_COL_DIM}; font-size: 11px;"
-            f" min-width: 32px; max-width: 32px;"
+            f" color: #CFCFCF; font-size: 10px;"
+            f" min-width: 46px; max-width: 46px;"
             f" min-height: 32px; max-height: 32px;"
             f" border-radius: 4px; }}"
-            f"QPushButton:hover {{ background: #2a2a2a; color: {_COL_ACTIVE}; }}"
-            f"QPushButton:pressed {{ background: #3a3a3a; color: {_COL_LABEL}; }}"
+            f"QPushButton:hover {{ background: #2A2A2A; color: white; }}"
+            f"QPushButton:pressed {{ background: #343434; color: white; }}"
         )
         _close_ss = (
             f"QPushButton {{ background: transparent; border: none;"
-            f" color: {_COL_DIM}; font-size: 11px;"
-            f" min-width: 32px; max-width: 32px;"
+            f" color: #CFCFCF; font-size: 10px;"
+            f" min-width: 46px; max-width: 46px;"
             f" min-height: 32px; max-height: 32px;"
             f" border-radius: 4px; }}"
-            f"QPushButton:hover {{ background: #E81123; color: white; }}"
-            f"QPushButton:pressed {{ background: #AF0F1E; color: white; }}"
+            f"QPushButton:hover {{ background: #C42B1C; color: white; }}"
+            f"QPushButton:pressed {{ background: #A82019; color: white; }}"
         )
         _update_ss = (
             f"QPushButton {{ background: transparent; border: none;"
-            f" color: #FFCC00; font-size: 11px;"
-            f" min-width: 32px; max-width: 32px;"
+            f" color: #FFCC00; font-size: 10px;"
+            f" min-width: 36px; max-width: 36px;"
             f" min-height: 32px; max-height: 32px;"
             f" border-radius: 4px; }}"
-            f"QPushButton:hover {{ background: #3a3a00; color: #FFFF00; }}"
-            f"QPushButton:pressed {{ background: #2a2a00; color: #FFCC00; }}"
+            f"QPushButton:hover {{ background: #2e2a00; color: #FFE566; }}"
+            f"QPushButton:pressed {{ background: #252200; color: #FFCC00; }}"
         )
 
-        # App icon
-        icon_px = TrayIcon._make_icon().pixmap(18, 18)
-        self._icon_lbl = QLabel()
-        self._icon_lbl.setPixmap(icon_px)
-        self._icon_lbl.setFixedSize(18, 18)
-        self._icon_lbl.setStyleSheet("background: transparent; border: none;")
+        # App icon — clicking it toggles the sidebar
+        self._icon_btn = _AppIconButton(self)
+        self._icon_btn.clicked.connect(self.icon_clicked)
 
         title_lbl = QLabel(title)
         title_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        title_lbl.setFont(QFont(_FONT, 10, QFont.Weight.Bold))
+        title_lbl.setFont(QFont(_FONT, 9, QFont.Weight.Bold))
         title_lbl.setStyleSheet(
-            f"color: {_COL_ACTIVE}; letter-spacing: 2px;"
+            f"color: {_COL_ACTIVE}; letter-spacing: 0.5px;"
             " background: transparent; border: none;"
         )
 
@@ -139,18 +264,18 @@ class _TitleBar(QWidget):
         up_icon_lay.addWidget(self._up_icon, 0, Qt.AlignmentFlag.AlignCenter)
         self._update_btn.clicked.connect(self.update_clicked)
 
-        self._min_btn   = QPushButton("\u2014")   # — em dash  (minimize)
-        self._max_btn   = QPushButton("\u25a1")   # □ square   (maximize)
-        self._close_btn = QPushButton("\u2715")   # ✕ thin ×   (close)
+        self._min_btn   = QPushButton("\uE921")
+        self._max_btn   = QPushButton("\uE922")
+        self._close_btn = QPushButton("\uE8BB")
 
         for btn in (self._min_btn, self._max_btn, self._close_btn):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFont(QFont("Segoe UI Symbol", 9))
+            btn.setFont(QFont("Segoe Fluent Icons", 10))
         self._min_btn.setStyleSheet(_btn_ss)
         self._max_btn.setStyleSheet(_btn_ss)
         self._close_btn.setStyleSheet(_close_ss)
 
-        layout.addWidget(self._icon_lbl)
+        layout.addWidget(self._icon_btn)
         layout.addSpacing(8)
         layout.addWidget(title_lbl)
         layout.addStretch(1)
@@ -159,6 +284,9 @@ class _TitleBar(QWidget):
         layout.addWidget(self._min_btn)
         layout.addWidget(self._max_btn)
         layout.addWidget(self._close_btn)
+
+    def set_sidebar_open(self, open: bool) -> None:
+        self._icon_btn.set_sidebar_open(open)
 
     # ---- drag-to-move ----
 
@@ -184,6 +312,14 @@ class _TitleBar(QWidget):
     def mouseDoubleClickEvent(self, event):
         super().mouseDoubleClickEvent(event)
 
+    def enterEvent(self, event) -> None:
+        self._icon_btn.set_forced_hover(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._icon_btn.set_forced_hover(False)
+        super().leaveEvent(event)
+
 
 # ---------------------------------------------------------------------------
 # Eliding button — QPushButton that truncates its label with '...' on resize
@@ -192,8 +328,9 @@ class _TitleBar(QWidget):
 class _ElidedButton(QPushButton):
     """QPushButton that elides its label to fit the available width."""
 
-    _H_PAD   = 36         # total horizontal padding (18px × 2 from stylesheet)
+    _H_PAD   = 30         # total horizontal padding (12px × 2 from stylesheet)
     _CHEVRON = " \u25be"  # appended after elision, always visible beside the text
+
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(parent)
@@ -236,8 +373,99 @@ class _Separator(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
+        p.setOpacity(0.3)
         p.fillRect(self.rect(), QColor(_COL_BORDER))
         p.end()
+
+
+class _RoundedPanel(QWidget):
+    """Paint and mask a panel so child widgets cannot bleed into square corners."""
+
+    def __init__(
+        self,
+        bg_color: str,
+        border_color: str | None = None,
+        radius_tl: int = 10,
+        radius_tr: int = 10,
+        radius_br: int = 10,
+        radius_bl: int = 10,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._bg_color = QColor(bg_color)
+        self._border_color = QColor(border_color) if border_color else None
+        self._radius_tl = radius_tl
+        self._radius_tr = radius_tr
+        self._radius_br = radius_br
+        self._radius_bl = radius_bl
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    def _rounded_path(self, rect: QRectF) -> QPainterPath:
+        left = rect.left()
+        top = rect.top()
+        right = rect.right()
+        bottom = rect.bottom()
+
+        tl = min(self._radius_tl, rect.width() / 2, rect.height() / 2)
+        tr = min(self._radius_tr, rect.width() / 2, rect.height() / 2)
+        br = min(self._radius_br, rect.width() / 2, rect.height() / 2)
+        bl = min(self._radius_bl, rect.width() / 2, rect.height() / 2)
+
+        path = QPainterPath()
+        path.moveTo(left + tl, top)
+        path.lineTo(right - tr, top)
+        if tr:
+            path.quadTo(right, top, right, top + tr)
+        else:
+            path.lineTo(right, top)
+        path.lineTo(right, bottom - br)
+        if br:
+            path.quadTo(right, bottom, right - br, bottom)
+        else:
+            path.lineTo(right, bottom)
+        path.lineTo(left + bl, bottom)
+        if bl:
+            path.quadTo(left, bottom, left, bottom - bl)
+        else:
+            path.lineTo(left, bottom)
+        path.lineTo(left, top + tl)
+        if tl:
+            path.quadTo(left, top, left + tl, top)
+        else:
+            path.lineTo(left, top)
+        path.closeSubpath()
+        return path
+
+    def _update_mask(self) -> None:
+        if self.width() <= 0 or self.height() <= 0:
+            self.clearMask()
+            return
+        path = self._rounded_path(QRectF(0, 0, self.width(), self.height()))
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_mask()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = self._rounded_path(
+            QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        )
+        painter.fillPath(path, self._bg_color)
+        if self._border_color:
+            pen = QPen(self._border_color, 1)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.drawPath(path)
+
+
+class _SidebarPanel(_RoundedPanel):
+    """Rounded overlay panel that visually matches the main window chrome."""
+
+    def __init__(self, parent=None):
+        super().__init__("#202020", radius_tl=0, radius_tr=0, radius_br=0, radius_bl=0, parent=parent)
 
 
 class _BookmarkDialog(QDialog):
@@ -558,6 +786,7 @@ class _NavIcon(QWidget):
     SEARCH  = 8
     CLEAR   = 9
     SEND    = 10
+    STOP    = 11
     _SZ     = 20
 
     def __init__(self, kind: int, parent=None):
@@ -566,6 +795,10 @@ class _NavIcon(QWidget):
         self._color = QColor(_COL_LABEL)
         self.setFixedSize(self._SZ, self._SZ)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def set_kind(self, kind: int) -> None:
+        self._kind = kind
+        self.update()
 
     def set_color(self, hex_color: str) -> None:
         self._color = QColor(hex_color)
@@ -741,6 +974,12 @@ class _NavIcon(QWidget):
             p.drawLine(QPointF(c + 2, c - 4), QPointF(c + 6, c))
             p.drawLine(QPointF(c + 2, c + 4), QPointF(c + 6, c))
 
+        elif self._kind == self.STOP:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(self._color)
+            # Filled square centred in the icon
+            p.drawRect(QRectF(c - 5, c - 5, 10, 10))
+
         p.end()
 
 
@@ -757,10 +996,12 @@ class _SidebarNavItem(QWidget):
         super().__init__(parent)
         self._is_checked = False
         self._is_hovered = False
+        self._label_visible = True
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(36)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(14, 9, 14, 9)   # centred (48-20)/2 = 14
+        row.setContentsMargins(12, 0, 12, 0)
         row.setSpacing(8)
 
         self._icon = _NavIcon(icon_kind, self)
@@ -774,13 +1015,13 @@ class _SidebarNavItem(QWidget):
         self._refresh()
 
     def set_label_visible(self, visible: bool) -> None:
+        self._label_visible = visible
         self._lbl.setVisible(visible)
-        # Shift icon margins: centred when collapsed, left-aligned when expanded
         row = self.layout()
         if visible:
-            row.setContentsMargins(10, 9, 4, 9)
+            row.setContentsMargins(12, 0, 12, 0)
         else:
-            row.setContentsMargins(14, 9, 14, 9)
+            row.setContentsMargins(14, 0, 14, 0)
 
     # ------------------------------------------------------------------
 
@@ -812,15 +1053,19 @@ class _SidebarNavItem(QWidget):
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        body_rect = QRectF(self.rect()).adjusted(6, 2, -6, -2)
+
         if self._is_checked or self._is_hovered:
-            p.fillRect(self.rect(), QColor("#1e1f20"))
-        bar = (
-            _COL_ACTIVE if self._is_checked else
-            _COL_DIM    if self._is_hovered else
-            None
-        )
-        if bar:
-            p.fillRect(QRect(0, 0, 2, self.height()), QColor(bar))
+            fill = QColor("#2B2118" if self._is_checked else "#282828")
+            border = QColor("#52311A" if self._is_checked else "#313131")
+            path = QPainterPath()
+            path.addRoundedRect(body_rect, 9, 9)
+            p.fillPath(path, fill)
+            pen = QPen(border, 1)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            p.drawPath(path)
         p.end()
 
     def _refresh(self) -> None:
@@ -831,7 +1076,7 @@ class _SidebarNavItem(QWidget):
         )
         self._icon.set_color(color)
         self._lbl.setStyleSheet(
-            f"color: {color}; background: transparent; border: none; letter-spacing: 1px;"
+            f"color: {color}; background: transparent; border: none; letter-spacing: 0px;"
         )
         self.update()
 
@@ -862,6 +1107,11 @@ class _IconButton(QWidget):
             sz = 32
             self.setFixedSize(sz, sz)
 
+    def set_icon(self, icon_kind: int, tooltip: str = "") -> None:
+        self._icon.set_kind(icon_kind)
+        if tooltip:
+            self.setToolTip(tooltip)
+
     def setEnabled(self, enabled: bool) -> None:
         super().setEnabled(enabled)
         self._icon.set_color(_COL_LABEL if enabled else "#3D1E00")
@@ -890,15 +1140,45 @@ class _IconButton(QWidget):
 
 def _menu_ss(font_size: int) -> str:
     return (
-        f"QMenu {{ background: {_COL_INPUT_BG}; color: {_COL_ACTIVE};"
+        f"QMenu {{ background: transparent; color: {_COL_ACTIVE};"
         f" font-family: '{_FONT}'; font-size: {font_size}pt;"
-        f" font-weight: bold; letter-spacing: 1px;"
-        f" border: 1px solid {_COL_LABEL}; border-radius: 4px; }}"
-        f"QMenu::item {{ padding: 3px 12px; }}"
-        f"QMenu::item:selected {{ background: #2a2a2a; color: {_COL_ACTIVE}; }}"
+        f" font-weight: 600; letter-spacing: 0px;"
+        f" border: none; padding: 6px 0px; }}"
+        f"QMenu::item {{ padding: 3px 10px; }}"
+        f"QMenu::item:selected {{ background: #282828; color: {_COL_ACTIVE}; }}"
         f"QMenu::item:disabled {{ color: {_COL_DIM}; }}"
-        f"QMenu::separator {{ height: 1px; background: #252525; margin: 3px 8px; }}"
+        f"QMenu::separator {{ height: 1px; background: {_COL_BORDER}; margin: 2px 6px; }}"
     )
+
+
+class _RoundedMenu(QMenu):
+    """QMenu with smooth anti-aliased rounded corners via WA_TranslucentBackground.
+
+    Replaces the setMask approach (which caused border thinness at corners due to
+    pixel-level clipping) with a fully composited transparent window + custom paintEvent.
+    The 6px top/bottom padding in _menu_ss ensures items start below the corner arc,
+    so their hover fill never bleeds into the transparent corner regions.
+    """
+    _RADIUS = 10
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+            self._RADIUS, self._RADIUS,
+        )
+        pen = QPen(QColor(_COL_BORDER), 1)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        p.setBrush(QColor(_COL_INPUT_BG))
+        p.drawPath(path)
+        p.end()
 
 
 # ---------------------------------------------------------------------------
@@ -953,8 +1233,10 @@ class _MenuRow(QWidget):
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         if self._hovered:
-            # Inset horizontally by 2px to ensure highlight doesn't bleed into menu border
-            p.fillRect(self.rect().adjusted(2, 0, -2, 0), QColor("#2a2a2a"))
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            hl = QPainterPath()
+            hl.addRoundedRect(QRectF(self.rect()).adjusted(3, 1, -3, -1), 4, 4)
+            p.fillPath(hl, QColor(42, 42, 42, 200))
         
         font = self._make_font()
         p.setFont(font)
@@ -1068,24 +1350,29 @@ class CoordWindow(QWidget):
         self._bookmarks:      list[dict] = self._load_bookmarks()
 
         self._build_ui()
-        self.setFixedSize(self._FIXED_W + self._SIDEBAR_ICON_W, self._FIXED_H)
+        self.setFixedSize(self._FIXED_W, self._FIXED_H)
+        QApplication.instance().installEventFilter(self)
 
     def closeEvent(self, event):
         """Hide instead of destroy so state is preserved."""
         event.ignore()
         self.hide()
 
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and self._sidebar_open:
+            self._close_sidebar()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def paintEvent(self, event):
-        """Draw rounded-rect background and border."""
+        """Draw rounded-rect background and outer border."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         path = QPainterPath()
-        # Slightly inset the path to ensure the 1px border is fully visible
-        path.addRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 8, 8)
-
-        painter.fillPath(path, QColor("#131314"))
-
+        path.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+        painter.fillPath(path, QColor("#181818"))
         pen = QPen(QColor(_COL_BORDER), 1)
         pen.setCosmetic(True)
         painter.setPen(pen)
@@ -1094,9 +1381,28 @@ class CoordWindow(QWidget):
     def resizeEvent(self, event):
         """Handle window resizing."""
         super().resizeEvent(event)
-        # Sync overlay sidebar height with the body area
         if hasattr(self, '_sidebar_panel') and hasattr(self, '_body'):
-            self._sidebar_panel.setFixedHeight(self._body.height() - 1)
+            self._sidebar_panel.setFixedHeight(self._body.height())
+        if hasattr(self, '_body'):
+            self._update_body_mask()
+
+    def _update_body_mask(self) -> None:
+        """Clip _body (and all its children) to the window's rounded bottom corners."""
+        w, h = self._body.width(), self._body.height()
+        if w <= 0 or h <= 0:
+            self._body.clearMask()
+            return
+        r = 10
+        path = QPainterPath()
+        path.moveTo(0, 0)
+        path.lineTo(w, 0)
+        path.lineTo(w, h - r)
+        path.quadTo(w, h, w - r, h)
+        path.lineTo(r, h)
+        path.quadTo(0, h, 0, h - r)
+        path.lineTo(0, 0)
+        path.closeSubpath()
+        self._body.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     @pyqtProperty(int)
     def sidebarWidth(self) -> int:
@@ -1106,20 +1412,19 @@ class CoordWindow(QWidget):
     def sidebarWidth(self, w: int) -> None:
         self._sidebar_w_cur = w
         self._sidebar_panel.setFixedWidth(w)
-        # Keep window width fixed; sidebar expands over content
         if hasattr(self, '_body'):
-            self._sidebar_panel.setFixedHeight(self._body.height() - 1)
+            self._sidebar_panel.setFixedHeight(self._body.height())
         self._sidebar_panel.raise_()
 
-        # Update separators and labels based on expansion state
-        is_expanded = w > self._SIDEBAR_ICON_W
-        if hasattr(self, '_sidebar_sep'):
-            self._sidebar_sep.setVisible(is_expanded)
+        if hasattr(self, '_sidebar_footer_sep'):
+            self._sidebar_footer_sep.setVisible(w > 0)
 
         if hasattr(self, '_sidebar_nav_items'):
-            labels_visible = w > self._SIDEBAR_ICON_W + 20
+            labels_visible = w > 80
             for item in self._sidebar_nav_items:
                 item.set_label_visible(labels_visible)
+            if hasattr(self, '_info_item'):
+                self._info_item.set_label_visible(labels_visible)
 
     # ------------------------------------------------------------------
     # Public API called from main's push_nav()
@@ -1218,30 +1523,36 @@ class CoordWindow(QWidget):
         self._title_bar._max_btn.setEnabled(False)
         self._title_bar._close_btn.clicked.connect(self.hide)
         self._title_bar.update_clicked.connect(self._on_update_clicked)
+        self._title_bar.icon_clicked.connect(self._toggle_sidebar)
         outer.addWidget(self._title_bar)
 
-        outer.addWidget(_Separator())
-
-        # Horizontal body container
+        # Horizontal body container (no separator — title bar bleeds into content)
         self._body = QWidget()
         self._body.setStyleSheet("background: transparent;")
         outer.addWidget(self._body)
 
-        # Content stack fills the area after the permanent sidebar strip
+        # Card-style content container with rounded corners
         content_layout = QHBoxLayout(self._body)
-        # Inset by 1px to show the window's left border
-        content_layout.setContentsMargins(_SIDEBAR_ICON_W + 1, 0, 0, 0)
+        content_layout.setContentsMargins(3, 4, 3, 3)
         content_layout.setSpacing(0)
 
-        self._content_stack = QStackedWidget()
-        self._content_stack.setStyleSheet("background: transparent;")
-        content_layout.addWidget(self._content_stack)
+        self._card = _RoundedPanel("#181818", radius_tl=10, radius_tr=10, radius_br=10, radius_bl=10)
+        card_inner = QVBoxLayout(self._card)
+        card_inner.setContentsMargins(0, 0, 0, 0)
+        card_inner.setSpacing(0)
 
-        # Sidebar is added as an overlay on top of _body
+        self._content_stack = QStackedWidget()
+        self._content_stack.setStyleSheet("background: transparent; border-radius: 10px;")
+        card_inner.addWidget(self._content_stack)
+        content_layout.addWidget(self._card)
+
+        # Sidebar is added as an overlay on top of _body (flush against window edges)
         self._build_sidebar()
         self._sidebar_panel.setParent(self._body)
-        # Move by 1px to avoid covering the window's left border
-        self._sidebar_panel.move(1, 0)
+        self._sidebar_panel.move(0, 0)
+        self._sidebar_panel.setFixedHeight(self._body.height())
+        self._sidebar_panel.raise_()
+        self._update_body_mask()
 
         self._build_target_page()
         self._build_bookmarks_page()
@@ -1251,20 +1562,21 @@ class CoordWindow(QWidget):
         """Build the main target-input page and add it to the content stack."""
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(14, 10, 14, 14)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 8, 12, 10)
+        layout.setSpacing(4)
 
         self._planet_name_label = _ElidedButton("Select a Planet")
-        self._planet_name_label.setFont(QFont(_FONT, _SZ_BTN, QFont.Weight.Bold))
+        self._planet_name_label.setFont(QFont(_FONT, _SZ_BTN, QFont.Weight.DemiBold))
         self._planet_name_label.setStyleSheet(
-            f"QPushButton {{ background: #1e1f20; color: {_COL_ACTIVE};"
-            f" border: 1px solid {_COL_LABEL}; border-radius: 2px;"
-            f" padding: 6px 18px; letter-spacing: 1px; }}"
-            f"QPushButton:hover {{ border-color: {_COL_ACTIVE}; background: #2a2a2a; }}"
-            f"QPushButton:pressed {{ background: #994400; }}"
+            f"QPushButton {{ background: {_COL_INPUT_BG}; color: {_COL_ACTIVE};"
+            f" border: 1px solid {_COL_LABEL}; border-radius: 3px;"
+            f" padding: 4px 12px; letter-spacing: 0px;"
+            f" font-family: '{_FONT}', 'Segoe UI Symbol'; }}"
+            f"QPushButton:hover {{ border-color: {_COL_ACTIVE}; background: #282828; }}"
+            f"QPushButton:pressed {{ background: #7A3D00; }}"
             f"QPushButton:disabled {{ color: {_COL_DIM}; border-color: {_COL_DIM}; }}"
         )
-        self._planet_name_label.setFixedWidth(self._planet_name_label.sizeHint().width())
+        self._planet_name_label.setFixedWidth(int(self._planet_name_label.sizeHint().width() * 1.5))
         self._planet_name_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self._planet_name_label.setEnabled(False)
         self._planet_name_label.clicked.connect(self._show_body_menu)
@@ -1284,8 +1596,8 @@ class CoordWindow(QWidget):
 
         # Top row: Status | Select Planet | Body Count
         top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 4, 0, 4)
-        top_row.setSpacing(10)
+        top_row.setContentsMargins(0, 2, 0, 2)
+        top_row.setSpacing(8)
         top_row.addWidget(self._status_label, 0)
         top_row.addWidget(self._planet_name_label, 1) # Expand and center
         top_row.addWidget(self._body_count_label, 0)
@@ -1315,12 +1627,20 @@ class CoordWindow(QWidget):
 
         body_name_label = QLabel("BODY NAME")
         body_name_label.setFont(QFont(_FONT, _SZ_LABEL, QFont.Weight.Bold))
-        body_name_label.setStyleSheet(f"background: transparent; color: {_COL_LABEL}; letter-spacing: 1px;")
+        body_name_label.setStyleSheet(f"background: transparent; color: {_COL_LABEL}; letter-spacing: 0px;")
+
+        # Inline error label — sits between the section label and the icon buttons
+        self._error_label = QLabel("")
+        self._error_label.setFont(QFont(_FONT, _SZ_HINT))
+        self._error_label.setStyleSheet(f"background: transparent; color: {COLOR_ERROR};")
+        self._error_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._error_label.setVisible(False)
 
         body_name_row = QHBoxLayout()
         body_name_row.setContentsMargins(0, 0, 0, 0)
         body_name_row.setSpacing(6)
-        body_name_row.addWidget(body_name_label, 1)
+        body_name_row.addWidget(body_name_label, 0)
+        body_name_row.addWidget(self._error_label, 1)
         body_name_row.addWidget(self._bookmark_btn)
         body_name_row.addWidget(self._random_btn)
         body_name_row.addWidget(self._history_btn)
@@ -1333,11 +1653,11 @@ class CoordWindow(QWidget):
         # Latitude / Longitude in a grid to save vertical space
         coords_grid = QGridLayout()
         coords_grid.setContentsMargins(0, 0, 0, 0)
-        coords_grid.setSpacing(8)
+        coords_grid.setSpacing(6)
 
         lat_label = QLabel("LATITUDE (−90 to 90)")
         lat_label.setFont(QFont(_FONT, _SZ_LABEL, QFont.Weight.Bold))
-        lat_label.setStyleSheet(f"background: transparent; color: {_COL_LABEL}; letter-spacing: 1px;")
+        lat_label.setStyleSheet(f"background: transparent; color: {_COL_LABEL}; letter-spacing: 0px;")
         
         self._lat_input = self._make_line_edit("e.g. −22.45")
         self._lat_input.textChanged.connect(self._clear_error)
@@ -1346,7 +1666,7 @@ class CoordWindow(QWidget):
 
         lon_label = QLabel("LONGITUDE (−180 to 180)")
         lon_label.setFont(QFont(_FONT, _SZ_LABEL, QFont.Weight.Bold))
-        lon_label.setStyleSheet(f"background: transparent; color: {_COL_LABEL}; letter-spacing: 1px;")
+        lon_label.setStyleSheet(f"background: transparent; color: {_COL_LABEL}; letter-spacing: 0px;")
 
         self._lon_input = self._make_line_edit("e.g. 137.88")
         self._lon_input.textChanged.connect(self._clear_error)
@@ -1367,18 +1687,19 @@ class CoordWindow(QWidget):
 
         self._set_btn = _IconButton(_NavIcon.SEND, "Set Target")
         self._set_btn.setEnabled(False) # Disabled until name is entered
-        self._set_btn.clicked.connect(self._on_set)
+        self._set_btn.clicked.connect(self._on_set_or_stop)
+        self._navigating = False
 
         self._move_btn   = self._make_button("Move overlay")
         self._toggle_btn = self._make_button("Hide overlay")
         
         # Reduced font size and fixed width to fit inline
         _small_btn_ss = (
-            f"QPushButton {{ background: #1e1f20; color: {_COL_ACTIVE};"
-            f" border: 1px solid {_COL_LABEL}; border-radius: 2px;"
-            f" padding: 4px 8px; letter-spacing: 0.5px; font-size: 9pt; }}"
-            f"QPushButton:hover {{ border-color: {_COL_ACTIVE}; background: #2a2a2a; }}"
-            f"QPushButton:pressed {{ background: #994400; }}"
+            f"QPushButton {{ background: {_COL_INPUT_BG}; color: {_COL_ACTIVE};"
+            f" border: 1px solid {_COL_LABEL}; border-radius: 3px;"
+            f" padding: 3px 8px; letter-spacing: 0px; font-size: 9pt; }}"
+            f"QPushButton:hover {{ border-color: {_COL_ACTIVE}; background: #282828; }}"
+            f"QPushButton:pressed {{ background: #7A3D00; }}"
             f"QPushButton:disabled {{ color: {_COL_DIM}; border-color: {_COL_DIM}; }}"
         )
         self._move_btn.setStyleSheet(_small_btn_ss)
@@ -1401,27 +1722,28 @@ class CoordWindow(QWidget):
         ctrl_row.addWidget(self._set_btn)
         layout.addLayout(ctrl_row)
 
-        # Error label
-        self._error_label = QLabel("")
-        self._error_label.setFont(QFont(_FONT, _SZ_HINT))
-        self._error_label.setStyleSheet(f"background: transparent; color: {COLOR_ERROR};")
-        self._error_label.setWordWrap(True)
-        self._error_label.setVisible(False)
-        layout.addWidget(self._error_label)
-
         self._content_stack.addWidget(page)
 
     def _build_bookmarks_page(self) -> None:
         """Build the Bookmarks page with gallery view."""
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
 
+        header_row = QHBoxLayout()
         header = QLabel("BOOKMARKS")
-        header.setFont(QFont(_FONT, 14, QFont.Weight.Bold))
-        header.setStyleSheet(f"color: {_COL_ACTIVE}; letter-spacing: 2px;")
-        layout.addWidget(header)
+        header.setFont(QFont(_FONT, _SZ_TITLE, QFont.Weight.Bold))
+        header.setStyleSheet(f"color: {_COL_ACTIVE}; letter-spacing: 0.5px;")
+        header_row.addWidget(header)
+        header_row.addStretch(1)
+
+        self._search_btn = _IconButton(
+            _NavIcon.SEARCH, "Search Bookmarks", size=(32, 32)
+        )
+        self._search_btn.clicked.connect(self._toggle_bookmark_search)
+        header_row.addWidget(self._search_btn)
+        layout.addLayout(header_row)
 
         layout.addWidget(_Separator())
 
@@ -1448,8 +1770,8 @@ class CoordWindow(QWidget):
         self._bookmark_container = QWidget()
         self._bookmark_container.setStyleSheet("background: transparent;")
         self._bookmark_grid = QGridLayout(self._bookmark_container)
-        self._bookmark_grid.setContentsMargins(0, 10, 0, 10)
-        self._bookmark_grid.setSpacing(12)
+        self._bookmark_grid.setContentsMargins(0, 6, 0, 6)
+        self._bookmark_grid.setSpacing(8)
         self._bookmark_grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         self._bookmark_scroll.setWidget(self._bookmark_container)
@@ -1566,57 +1888,199 @@ class CoordWindow(QWidget):
 
     def _build_about_page(self) -> None:
         """Build the About/info page and add it to the content stack."""
+        _GH_BASE   = f"https://github.com/{GITHUB_REPO}"
+        _LINK_COL  = "#4A9FDF"   # blue hyperlink colour
+
+        # --- helpers (local, no state needed) ---
+        def _section_cap(text: str) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setFont(QFont(_FONT, 8, QFont.Weight.Bold))
+            lbl.setStyleSheet(
+                f"color: {_COL_DIM}; letter-spacing: 0.5px; background: transparent;"
+            )
+            return lbl
+
+        def _link(display: str, url: str) -> QLabel:
+            lbl = QLabel(
+                f'<a href="{url}" style="color:{_LINK_COL};text-decoration:none;">'
+                f'{display}</a>'
+            )
+            lbl.setFont(QFont(_FONT, 11))
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setOpenExternalLinks(True)
+            lbl.setStyleSheet("background: transparent;")
+            lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            return lbl
+
+        # --- outer page + scroll area ---
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(14, 24, 14, 14)
-        layout.setSpacing(10)
+        page_lay = QVBoxLayout(page)
+        page_lay.setContentsMargins(0, 0, 0, 0)
+        page_lay.setSpacing(0)
 
-        title = QLabel("ED NAVIGATOR")
-        title.setFont(QFont(_FONT, 16, QFont.Weight.Bold))
-        title.setStyleSheet(f"color: {_COL_ACTIVE}; letter-spacing: 3px; background: transparent;")
-        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(title)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: #1a1a1a; width: 5px; border: none; }"
+            "QScrollBar::handle:vertical { background: #4a2800;"
+            " border-radius: 2px; min-height: 20px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
+            " { height: 0px; }"
+        )
 
-        subtitle = QLabel("Surface Navigator Overlay")
-        subtitle.setFont(QFont(_FONT, 10))
-        subtitle.setStyleSheet(f"color: {_COL_LABEL}; letter-spacing: 1px; background: transparent;")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(subtitle)
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(inner)
+        lay.setContentsMargins(14, 14, 14, 18)
+        lay.setSpacing(0)
 
-        layout.addSpacing(4)
+        # ── Header ──────────────────────────────────────────────────────
+        hdr = QLabel("INFORMATION")
+        hdr.setFont(QFont(_FONT, 14, QFont.Weight.Bold))
+        hdr.setStyleSheet(
+            f"color: {_COL_ACTIVE}; letter-spacing: 1px; background: transparent;"
+        )
+        lay.addWidget(hdr)
+        lay.addSpacing(8)
+        lay.addWidget(_Separator())
+        lay.addSpacing(14)
 
-        layout.addWidget(_Separator())
+        # ── Branding block ───────────────────────────────────────────────
+        brand_row = QHBoxLayout()
+        brand_row.setContentsMargins(0, 0, 0, 0)
+        brand_row.setSpacing(12)
 
-        layout.addSpacing(4)
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(TrayIcon._make_icon().pixmap(36, 36))
+        icon_lbl.setFixedSize(36, 36)
+        icon_lbl.setStyleSheet("background: transparent;")
+        brand_row.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        ver_lbl = QLabel(f"Version  {VERSION}")
-        ver_lbl.setFont(QFont(_FONT, 11))
-        ver_lbl.setStyleSheet(f"color: {_COL_LABEL}; letter-spacing: 1px; background: transparent;")
-        ver_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(ver_lbl)
+        name_col = QVBoxLayout()
+        name_col.setSpacing(1)
+        app_name = QLabel("ED NAVIGATOR")
+        app_name.setFont(QFont(_FONT, 13, QFont.Weight.Bold))
+        app_name.setStyleSheet(
+            f"color: {_COL_ACTIVE}; letter-spacing: 1px; background: transparent;"
+        )
+        ver_lbl = QLabel(f"v{VERSION}")
+        ver_lbl.setFont(QFont(_FONT, 9))
+        ver_lbl.setStyleSheet(
+            f"color: {_COL_DIM}; letter-spacing: 0px; background: transparent;"
+        )
+        name_col.addWidget(app_name)
+        name_col.addWidget(ver_lbl)
+        brand_row.addLayout(name_col)
+        brand_row.addStretch(1)
+        lay.addLayout(brand_row)
+        lay.addSpacing(12)
 
-        layout.addSpacing(8)
+        # ── Description ─────────────────────────────────────────────────
+        desc = QLabel(
+            "A free and open-source ED tool designed for planet surface navigation."
+        )
+        desc.setFont(QFont(_FONT, 9))
+        desc.setStyleSheet(f"color: {_COL_LABEL}; background: transparent;")
+        desc.setWordWrap(True)
+        lay.addWidget(desc)
+        lay.addSpacing(14)
 
-        for label_text, value_text in (
-            ("Hotkey",     "Ctrl + Shift + N"),
-            ("Overlay",    "Click-through, always on top"),
-            ("Navigation", "Haversine great-circle"),
-            ("Game files", "Saved Games / Frontier Dev"),
+        # ── Links ────────────────────────────────────────────────────────
+        lay.addWidget(_Separator())
+        lay.addSpacing(12)
+
+        for cap, display, url in (
+            ("SOURCE CODE",
+             "github.com/s4nby/ed-nav",
+             _GH_BASE),
+            ("OFFICIAL WEBSITE",
+             "---",
+             None),
+            ("CONTACT / SUPPORT",
+             "95icarus@gmail.com",
+             None),
+            ("ISSUE TRACKING",
+             "github.com/s4nby/ed-nav/issues",
+             f"{_GH_BASE}/issues"),
         ):
-            row = QHBoxLayout()
-            row.setContentsMargins(8, 0, 8, 0)
-            lbl = QLabel(label_text)
-            lbl.setFont(QFont(_FONT, 10, QFont.Weight.Bold))
-            lbl.setStyleSheet(f"color: {_COL_LABEL}; background: transparent; letter-spacing: 1px;")
-            val = QLabel(value_text)
-            val.setFont(QFont(_FONT, 10))
-            val.setStyleSheet(f"color: {_COL_DIM}; background: transparent;")
-            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            row.addWidget(lbl)
-            row.addWidget(val, 1)
-            layout.addLayout(row)
+            lay.addWidget(_section_cap(cap))
+            lay.addSpacing(4)
+            if url is None:
+                plain = QLabel(display)
+                plain.setFont(QFont(_FONT, 11))
+                plain.setStyleSheet(f"color: {_COL_LABEL}; background: transparent;")
+                lay.addWidget(plain)
+            else:
+                lay.addWidget(_link(display, url))
+            lay.addSpacing(14)
 
-        layout.addStretch(1)
+        # ── Dependencies & Credits ───────────────────────────────────────
+        lay.addWidget(_Separator())
+        lay.addSpacing(12)
+
+        deps_hdr = QLabel("DEPENDENCIES & CREDITS")
+        deps_hdr.setFont(QFont(_FONT, 9, QFont.Weight.Bold))
+        deps_hdr.setStyleSheet(
+            f"color: {_COL_LABEL}; letter-spacing: 0.5px; background: transparent;"
+        )
+        lay.addWidget(deps_hdr)
+        lay.addSpacing(8)
+
+        for lib, note in (
+            ("Python 3",    "Core runtime"),
+            ("PyQt6",       "GUI framework — Qt6 bindings"),
+            ("PyInstaller", "Windows executable packaging"),
+        ):
+            dep_row = QHBoxLayout()
+            dep_row.setContentsMargins(0, 0, 0, 0)
+            dep_row.setSpacing(0)
+
+            lib_lbl = QLabel(lib)
+            lib_lbl.setFont(QFont(_FONT, 9, QFont.Weight.DemiBold))
+            lib_lbl.setStyleSheet(
+                f"color: {_COL_ACTIVE}; background: transparent;"
+            )
+            note_lbl = QLabel(note)
+            note_lbl.setFont(QFont(_FONT, 9))
+            note_lbl.setStyleSheet(f"color: {_COL_DIM}; background: transparent;")
+            note_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            dep_row.addWidget(lib_lbl)
+            dep_row.addWidget(note_lbl, 1)
+            lay.addLayout(dep_row)
+            lay.addSpacing(5)
+
+        lay.addSpacing(12)
+
+        # ── Disclaimer ───────────────────────────────────────────────────
+        lay.addWidget(_Separator())
+        lay.addSpacing(10)
+
+        disc_hdr = QLabel("DISCLAIMER")
+        disc_hdr.setFont(QFont(_FONT, 9, QFont.Weight.Bold))
+        disc_hdr.setStyleSheet(
+            f"color: {_COL_LABEL}; letter-spacing: 0.5px; background: transparent;"
+        )
+        lay.addWidget(disc_hdr)
+        lay.addSpacing(4)
+
+        disc_body = QLabel(
+            "THIS SOFTWARE IS PROVIDED AS-IS, WITHOUT WARRANTY OF ANY KIND. "
+            "NOT AFFILIATED WITH OR ENDORSED BY FRONTIER DEVELOPMENTS PLC. "
+            "USE AT YOUR OWN RISK."
+        )
+        disc_body.setFont(QFont(_FONT, 8))
+        disc_body.setStyleSheet(f"color: {_COL_DIM}; background: transparent;")
+        disc_body.setWordWrap(True)
+        lay.addWidget(disc_body)
+        lay.addStretch(1)
+
+        scroll.setWidget(inner)
+        page_lay.addWidget(scroll)
         self._content_stack.addWidget(page)
 
     # ------------------------------------------------------------------
@@ -1624,53 +2088,17 @@ class CoordWindow(QWidget):
     # ------------------------------------------------------------------
 
     def _build_sidebar(self) -> None:
-        """Build the inline sidebar; rests at icon-only width, expands to full."""
-        self._sidebar_w_cur = self._SIDEBAR_ICON_W
+        """Build the inline sidebar; completely hidden when closed, slides over content."""
+        self._sidebar_w_cur = 0
 
-        self._sidebar_panel = QWidget()
-        self._sidebar_panel.setObjectName("sidebarPanel")
-        self._sidebar_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self._sidebar_panel.setFixedWidth(self._SIDEBAR_ICON_W)
-        self._sidebar_panel.setStyleSheet(
-            "#sidebarPanel { background: #131314;"
-            " border-right: 1px solid #363636;"
-            " border-bottom-left-radius: 8px; }"
-        )
+        self._sidebar_panel = _SidebarPanel()
+        self._sidebar_panel.setFixedWidth(0)
 
         s_layout = QVBoxLayout(self._sidebar_panel)
-        s_layout.setContentsMargins(0, 0, 1, 14)
-        s_layout.setSpacing(0)
+        s_layout.setContentsMargins(8, 8, 8, 8)
+        s_layout.setSpacing(2)
 
-        # Top row: Hamburger [spacer] Search (search only visible when expanded)
-        self._sidebar_top_row = QWidget()
-        self._sidebar_top_row.setFixedHeight(self._TITLE_BAR_H)
-        top_row_layout = QHBoxLayout(self._sidebar_top_row)
-        top_row_layout.setContentsMargins(0, 0, 0, 0)
-        top_row_layout.setSpacing(0)
-
-        self._hamburger_btn = _IconButton(
-            _NavIcon.MENU, "Toggle Sidebar", size=(self._SIDEBAR_ICON_W, self._TITLE_BAR_H)
-        )
-        self._hamburger_btn.clicked.connect(self._toggle_sidebar)
-        top_row_layout.addWidget(self._hamburger_btn)
-
-        top_row_layout.addStretch(1)
-
-        self._search_btn = _IconButton(
-            _NavIcon.SEARCH, "Search Bookmarks", size=(self._SIDEBAR_ICON_W, self._TITLE_BAR_H)
-        )
-        self._search_btn.clicked.connect(self._toggle_bookmark_search)
-        self._search_btn.setVisible(False)
-        top_row_layout.addWidget(self._search_btn)
-
-        s_layout.addWidget(self._sidebar_top_row)
-
-        self._sidebar_sep = _Separator()
-        self._sidebar_sep.setVisible(False)
-        s_layout.addWidget(self._sidebar_sep)
-        s_layout.addSpacing(4)
-
-        # Nav items — vector icons centred at icon width; labels clip away naturally
+        # Nav items — moved to the very top
         self._sidebar_nav_items: list[_SidebarNavItem] = []
         for icon_kind, label, page_idx in (
             (_NavIcon.TARGET, "TARGET", 0),
@@ -1687,18 +2115,19 @@ class CoordWindow(QWidget):
 
         s_layout.addStretch(1)
 
-        # Footer row: Info icon
-        footer_lay = QHBoxLayout()
-        footer_lay.setContentsMargins(8, 0, 8, 0)
-        self._info_btn = _IconButton(_NavIcon.INFO, "About ED Navigator")
-        self._info_btn.clicked.connect(lambda: self._sidebar_nav_select(2)) # ABOUT page is index 2
-        footer_lay.addWidget(self._info_btn)
-        footer_lay.addStretch(1)
-        s_layout.addLayout(footer_lay)
+        self._sidebar_footer_sep = _Separator()
+        self._sidebar_footer_sep.setVisible(False)
+        s_layout.addWidget(self._sidebar_footer_sep)
+        s_layout.addSpacing(6)
+
+        self._info_item = _SidebarNavItem(_NavIcon.INFO, "ABOUT", self._sidebar_panel)
+        self._info_item.set_label_visible(False)
+        self._info_item.clicked.connect(lambda: self._sidebar_nav_select(2))
+        s_layout.addWidget(self._info_item)
 
         self._sidebar_anim = QPropertyAnimation(self, b"sidebarWidth")
-        self._sidebar_anim.setDuration(200)
-        self._sidebar_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self._sidebar_anim.setDuration(220)
+        self._sidebar_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._sidebar_anim.finished.connect(self._on_sidebar_anim_finished)
         self._sidebar_open = False
 
@@ -1710,7 +2139,7 @@ class CoordWindow(QWidget):
 
     def _open_sidebar(self) -> None:
         self._sidebar_open = True
-        self._search_btn.setVisible(True)
+        self._title_bar.set_sidebar_open(True)
         self._sidebar_anim.stop()
         self._sidebar_anim.setStartValue(self._sidebar_w_cur)
         self._sidebar_anim.setEndValue(self._SIDEBAR_FULL_W)
@@ -1718,18 +2147,20 @@ class CoordWindow(QWidget):
 
     def _close_sidebar(self) -> None:
         self._sidebar_open = False
+        self._title_bar.set_sidebar_open(False)
         self._sidebar_anim.stop()
         self._sidebar_anim.setStartValue(self._sidebar_w_cur)
-        self._sidebar_anim.setEndValue(self._SIDEBAR_ICON_W)
+        self._sidebar_anim.setEndValue(0)
         self._sidebar_anim.start()
 
     def _on_sidebar_anim_finished(self) -> None:
-        if not self._sidebar_open:
-            self._search_btn.setVisible(False)
+        pass
 
     def _sidebar_nav_select(self, page_idx: int) -> None:
         for i, item in enumerate(self._sidebar_nav_items):
             item.set_checked(i == page_idx)
+        if hasattr(self, '_info_item'):
+            self._info_item.set_checked(page_idx == 2)
         self._content_stack.setCurrentIndex(page_idx)
         if self._sidebar_open:
             self._close_sidebar()
@@ -1739,6 +2170,20 @@ class CoordWindow(QWidget):
     # ------------------------------------------------------------------
 
     def eventFilter(self, obj, event):
+        if (
+            self.isVisible()
+            and self._sidebar_open
+            and event.type() == QEvent.Type.MouseButtonPress
+            and hasattr(event, "globalPosition")
+        ):
+            global_pos = event.globalPosition().toPoint()
+            sidebar_pos = self._sidebar_panel.mapFromGlobal(global_pos)
+            icon_pos = self._title_bar._icon_btn.mapFromGlobal(global_pos)
+            inside_sidebar = self._sidebar_panel.rect().contains(sidebar_pos)
+            inside_toggle = self._title_bar._icon_btn.rect().contains(icon_pos)
+            if not inside_sidebar and not inside_toggle:
+                self._close_sidebar()
+
         # Activate 3D preview when focus moves to either coordinate field
         if (event.type() == QEvent.Type.FocusIn
                 and hasattr(self, '_lon_input')
@@ -1762,6 +2207,12 @@ class CoordWindow(QWidget):
     # ------------------------------------------------------------------
     # Button handlers
     # ------------------------------------------------------------------
+
+    def _on_set_or_stop(self) -> None:
+        if self._navigating:
+            self._on_clear()
+        else:
+            self._on_set()
 
     def _on_set(self) -> None:
         lat_text = self._lat_input.text().strip()
@@ -1788,6 +2239,9 @@ class CoordWindow(QWidget):
         body_name = (self._selected_body.name if self._selected_body
                      else self._body_name_input.text().strip() or None)
         self._save_history(lat, lon, body_name)
+        self._navigating = True
+        self._set_btn.set_icon(_NavIcon.STOP, "Stop Navigation")
+        self._set_btn.setEnabled(True)
         self.target_set.emit(lat, lon, radius, body_name, self._last_system)
 
     def _on_clear(self) -> None:
@@ -1796,6 +2250,11 @@ class CoordWindow(QWidget):
         self._body_name_input.clear()
         self._clear_error()
         self._planet_preview.set_target(None, None)
+        self._navigating = False
+        self._set_btn.set_icon(_NavIcon.SEND, "Set Target")
+        # Re-evaluate enabled state based on body name field
+        has_name = bool(self._body_name_input.text().strip())
+        self._set_btn.setEnabled(has_name)
         self.target_cleared.emit()
 
     def _update_preview_marker(self) -> None:
@@ -1876,7 +2335,7 @@ class CoordWindow(QWidget):
         """
         name = text.strip()
         has_name = bool(name)
-        self._set_btn.setEnabled(has_name)
+        self._set_btn.setEnabled(has_name or self._navigating)
         self._bookmark_btn.setEnabled(has_name)
 
         if not name:
@@ -1940,7 +2399,7 @@ class CoordWindow(QWidget):
         if not self._target_history or self._history_menu_open:
             return
         self._history_menu_open = True
-        menu = QMenu(self)
+        menu = _RoundedMenu(self)
 
         rows    = []
         actions = []
@@ -2000,7 +2459,7 @@ class CoordWindow(QWidget):
         if not self._bodies or self._menu_open:
             return
         self._menu_open = True
-        menu = QMenu(self)
+        menu = _RoundedMenu(self)
 
         def _natural_key(b):
             return [int(t) if t.isdigit() else t.lower()
@@ -2045,11 +2504,12 @@ class CoordWindow(QWidget):
         menu.adjustSize()
         hint = menu.sizeHint()
 
-        # Centre the menu under the trigger, then clamp to window edges
+        # Centre the menu under the trigger (with a small detach gap), then clamp to window edges
         x   = trigger.mapToGlobal(trigger.rect().bottomLeft()).x()
         x  += (trigger.width() - hint.width()) // 2
         pos = trigger.mapToGlobal(trigger.rect().bottomLeft())
         pos.setX(x)
+        pos.setY(pos.y() + 6)  # detach gap between button and menu
 
         win_right  = win_tl.x() + win_w
         win_bottom = win_tl.y() + win_h
@@ -2088,9 +2548,9 @@ class CoordWindow(QWidget):
         w.setFont(QFont(_FONT_MONO, _SZ_INPUT))
         w.setStyleSheet(
             f"QLineEdit {{ background: {_COL_INPUT_BG}; color: {_COL_ACTIVE};"
-            f" border: 1px solid {_COL_LABEL}; border-radius: 2px;"
-            f" padding: 4px 7px; }}"
-            f"QLineEdit:hover {{ border-color: {_COL_ACTIVE}; }}"
+            f" border: 1px solid {_COL_BORDER}; border-radius: 3px;"
+            f" padding: 3px 6px; }}"
+            f"QLineEdit:hover {{ border-color: {_COL_LABEL}; }}"
             f"QLineEdit:focus {{ border-color: {_COL_ACTIVE}; }}"
             f"QLineEdit::placeholder {{ color: {_COL_DIM}; }}"
         )
@@ -2102,11 +2562,11 @@ class CoordWindow(QWidget):
         w.setFont(QFont(_FONT, _SZ_BTN, QFont.Weight.Bold))
         w.setCursor(Qt.CursorShape.PointingHandCursor)
         w.setStyleSheet(
-            f"QPushButton {{ background: #1e1f20; color: {_COL_ACTIVE};"
-            f" border: 1px solid {_COL_LABEL}; border-radius: 2px;"
-            f" padding: 6px 12px; letter-spacing: 1px; }}"
-            f"QPushButton:hover {{ border-color: {_COL_ACTIVE}; background: #2a2a2a; }}"
-            f"QPushButton:pressed {{ background: #994400; }}"
+            f"QPushButton {{ background: {_COL_INPUT_BG}; color: {_COL_ACTIVE};"
+            f" border: 1px solid {_COL_LABEL}; border-radius: 3px;"
+            f" padding: 4px 10px; letter-spacing: 0px; }}"
+            f"QPushButton:hover {{ border-color: {_COL_ACTIVE}; background: #282828; }}"
+            f"QPushButton:pressed {{ background: #7A3D00; }}"
             f"QPushButton:disabled {{ color: {_COL_DIM}; border-color: {_COL_DIM}; }}"
         )
         return w
