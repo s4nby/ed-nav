@@ -14,7 +14,7 @@ import re
 from typing import Optional
 
 from PyQt6.QtCore    import QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSettings, QSize, Qt, QTimer, pyqtProperty, pyqtSignal
-from PyQt6.QtGui     import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QRegion
+from PyQt6.QtGui     import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen, QRegion
 from PyQt6.QtWidgets import (
     QApplication, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QMenu, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
@@ -285,6 +285,15 @@ class _TitleBar(QWidget):
         layout.addWidget(self._max_btn)
         layout.addWidget(self._close_btn)
 
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        p = QPainter(self)
+        gradient = QLinearGradient(0, self.height() - 10, 0, self.height())
+        gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
+        gradient.setColorAt(1.0, QColor(0, 0, 0, 30))
+        p.fillRect(QRect(1, self.height() - 10, self.width() - 2, 10), gradient)
+        p.end()
+
     def set_sidebar_open(self, open: bool) -> None:
         self._icon_btn.set_sidebar_open(open)
 
@@ -465,7 +474,17 @@ class _SidebarPanel(_RoundedPanel):
     """Rounded overlay panel that visually matches the main window chrome."""
 
     def __init__(self, parent=None):
-        super().__init__("#202020", radius_tl=0, radius_tr=0, radius_br=0, radius_bl=0, parent=parent)
+        super().__init__("#202020", radius_tl=0, radius_tr=0, radius_br=0, radius_bl=10, parent=parent)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        p = QPainter(self)
+        shadow_w = 12
+        gradient = QLinearGradient(self.width() - shadow_w, 0, self.width(), 0)
+        gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
+        gradient.setColorAt(1.0, QColor(0, 0, 0, 30))
+        p.fillRect(QRect(self.width() - shadow_w, 0, shadow_w, self.height()), gradient)
+        p.end()
 
 
 class _BookmarkDialog(QDialog):
@@ -1057,8 +1076,8 @@ class _SidebarNavItem(QWidget):
         body_rect = QRectF(self.rect()).adjusted(6, 2, -6, -2)
 
         if self._is_checked or self._is_hovered:
-            fill = QColor("#2B2118" if self._is_checked else "#282828")
-            border = QColor("#52311A" if self._is_checked else "#313131")
+            fill = QColor("#2B2118" if self._is_checked else "#201A12")
+            border = QColor("#52311A" if self._is_checked else "#3D2810")
             path = QPainterPath()
             path.addRoundedRect(body_rect, 9, 9)
             p.fillPath(path, fill)
@@ -1393,13 +1412,14 @@ class CoordWindow(QWidget):
             self._body.clearMask()
             return
         r = 10
+        bottom = h - 1
         path = QPainterPath()
         path.moveTo(0, 0)
         path.lineTo(w, 0)
-        path.lineTo(w, h - r)
-        path.quadTo(w, h, w - r, h)
-        path.lineTo(r, h)
-        path.quadTo(0, h, 0, h - r)
+        path.lineTo(w, bottom - r)
+        path.quadTo(w, bottom, w - r, bottom)
+        path.lineTo(r, bottom)
+        path.quadTo(0, bottom, 0, bottom - r)
         path.lineTo(0, 0)
         path.closeSubpath()
         self._body.setMask(QRegion(path.toFillPolygon().toPolygon()))
@@ -1416,8 +1436,6 @@ class CoordWindow(QWidget):
             self._sidebar_panel.setFixedHeight(self._body.height())
         self._sidebar_panel.raise_()
 
-        if hasattr(self, '_sidebar_footer_sep'):
-            self._sidebar_footer_sep.setVisible(w > 0)
 
         if hasattr(self, '_sidebar_nav_items'):
             labels_visible = w > 80
@@ -1549,7 +1567,7 @@ class CoordWindow(QWidget):
         # Sidebar is added as an overlay on top of _body (flush against window edges)
         self._build_sidebar()
         self._sidebar_panel.setParent(self._body)
-        self._sidebar_panel.move(0, 0)
+        self._sidebar_panel.move(1, 0)
         self._sidebar_panel.setFixedHeight(self._body.height())
         self._sidebar_panel.raise_()
         self._update_body_mask()
@@ -2101,8 +2119,8 @@ class CoordWindow(QWidget):
         # Nav items — moved to the very top
         self._sidebar_nav_items: list[_SidebarNavItem] = []
         for icon_kind, label, page_idx in (
-            (_NavIcon.TARGET, "TARGET", 0),
-            (_NavIcon.BOOKMARKS, "BOOKMARKS", 1),
+            (_NavIcon.TARGET, "Target", 0),
+            (_NavIcon.BOOKMARKS, "Bookmarks", 1),
         ):
             item = _SidebarNavItem(icon_kind, label, self._sidebar_panel)
             item.set_checked(page_idx == 0)
@@ -2115,12 +2133,7 @@ class CoordWindow(QWidget):
 
         s_layout.addStretch(1)
 
-        self._sidebar_footer_sep = _Separator()
-        self._sidebar_footer_sep.setVisible(False)
-        s_layout.addWidget(self._sidebar_footer_sep)
-        s_layout.addSpacing(6)
-
-        self._info_item = _SidebarNavItem(_NavIcon.INFO, "ABOUT", self._sidebar_panel)
+        self._info_item = _SidebarNavItem(_NavIcon.INFO, "About", self._sidebar_panel)
         self._info_item.set_label_visible(False)
         self._info_item.clicked.connect(lambda: self._sidebar_nav_select(2))
         s_layout.addWidget(self._info_item)
