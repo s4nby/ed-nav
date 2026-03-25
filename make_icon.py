@@ -9,9 +9,9 @@
 import io
 import sys
 
-from PyQt6.QtCore    import QBuffer, QIODevice, Qt
-from PyQt6.QtGui     import QColor, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtCore    import QBuffer, QIODevice, Qt
+from PySide6.QtGui     import QColor, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QApplication
 
 COLOR_ORANGE = "#FF6B00"
 

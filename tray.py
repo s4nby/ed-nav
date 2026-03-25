@@ -5,9 +5,9 @@
 # The icon is drawn programmatically: an orange ring with a crosshair
 # on a 32×32 transparent pixmap — matches the overlay aesthetic.
 
-from PyQt6.QtCore    import Qt, pyqtSignal
-from PyQt6.QtGui     import QColor, QIcon, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
+from PySide6.QtCore    import Qt, Signal
+from PySide6.QtGui     import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from constants import COLOR_ORANGE
 
@@ -15,11 +15,11 @@ from constants import COLOR_ORANGE
 class TrayIcon(QSystemTrayIcon):
     """System tray icon with context menu for overlay control."""
 
-    toggle_overlay  = pyqtSignal()
-    move_overlay    = pyqtSignal()
-    open_settings   = pyqtSignal()
-    toggle_settings = pyqtSignal()
-    quit_app        = pyqtSignal()
+    toggle_overlay  = Signal()
+    move_overlay    = Signal()
+    open_settings   = Signal()
+    toggle_settings = Signal()
+    quit_app        = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)

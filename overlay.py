@@ -14,11 +14,10 @@ import ctypes
 import math
 from typing import Optional
 
-from PyQt6.QtCore    import Qt, QTimer, QPoint, QPointF, QRectF
-from PyQt6.QtCore    import QSettings
-from PyQt6.QtGui     import (QColor, QPainter, QPen, QBrush, QFont,
+from PySide6.QtCore    import Qt, QTimer, QPoint, QPointF, QRectF
+from PySide6.QtGui     import (QColor, QPainter, QPen, QBrush, QFont,
                               QPainterPath)
-from PyQt6.QtWidgets import QWidget, QApplication
+from PySide6.QtWidgets import QWidget, QApplication
 
 from constants import (
     WINDOW_WIDTH, WINDOW_HEIGHT,
@@ -617,19 +616,15 @@ class OverlayCanvas(QWidget):
 
 class OverlayWindow(QWidget):
 
-    _SETTINGS_ORG = "ED-Navigator"
-    _SETTINGS_APP = "Overlay"
-
     def __init__(self):
         super().__init__()
 
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setMinimumSize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
 
@@ -644,6 +639,12 @@ class OverlayWindow(QWidget):
                 sg.left() + (sg.width() - WINDOW_WIDTH) // 2,
                 sg.top()  + 80,
             )
+
+    def paintEvent(self, _) -> None:
+        p = QPainter(self)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        p.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        p.end()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -870,13 +871,13 @@ class InclinationOverlay(QWidget):
 
     def __init__(self):
         super().__init__()
+
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setFixedSize(_INCL_W, _INCL_H)
 
         self._canvas = InclinationCanvas(self)
@@ -890,6 +891,12 @@ class InclinationOverlay(QWidget):
                 sg.left() + (sg.width() // 2) - _INCL_W - 160,
                 sg.top()  + int(sg.height() * 0.42),
             )
+
+    def paintEvent(self, _) -> None:
+        p = QPainter(self)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        p.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        p.end()
 
     def showEvent(self, event):
         super().showEvent(event)

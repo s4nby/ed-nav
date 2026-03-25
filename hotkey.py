@@ -9,8 +9,8 @@
 import ctypes
 import ctypes.wintypes
 
-from PyQt6.QtCore    import QTimer, pyqtSignal
-from PyQt6.QtWidgets import QWidget
+from PySide6.QtCore    import QTimer, Signal
+from PySide6.QtWidgets import QWidget
 
 from constants import HOTKEY_ID, HOTKEY_MODIFIERS, HOTKEY_VK, WM_HOTKEY
 
@@ -18,7 +18,7 @@ from constants import HOTKEY_ID, HOTKEY_MODIFIERS, HOTKEY_VK, WM_HOTKEY
 class GlobalHotkey(QWidget):
     """Hidden widget that owns a Win32 HWND for hotkey message delivery."""
 
-    activated = pyqtSignal()
+    activated = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,7 +38,7 @@ class GlobalHotkey(QWidget):
             pass   # Non-Windows or permission error — silently skip
 
     def nativeEvent(self, event_type, message):
-        # message is a sip.voidptr; cast to MSG struct
+        # message is a Shiboken VoidPtr; cast to MSG struct
         try:
             msg = ctypes.wintypes.MSG.from_address(int(message))
             if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:

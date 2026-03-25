@@ -13,9 +13,9 @@ import random
 import re
 from typing import Optional
 
-from PyQt6.QtCore    import QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSettings, QSize, Qt, QTimer, pyqtProperty, pyqtSignal
-from PyQt6.QtGui     import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen, QRegion
-from PyQt6.QtWidgets import (
+from PySide6.QtCore    import QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSettings, QSize, Qt, QTimer, Property, Signal
+from PySide6.QtGui     import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen, QRegion
+from PySide6.QtWidgets import (
     QApplication, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QMenu, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
     QScrollArea, QFrame, QDialog, QWidgetAction,
@@ -73,7 +73,7 @@ class _AppIconButton(QWidget):
     Clicking emits `clicked`.
     """
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     _SZ = 18   # matches the QLabel it replaces
 
@@ -93,9 +93,9 @@ class _AppIconButton(QWidget):
         self._anim.setDuration(160)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-    # ---- pyqtProperty (animatable) ----------------------------------------
+    # ---- Property (animatable) ----------------------------------------
 
-    @pyqtProperty(float)
+    @Property(float)
     def blend(self) -> float:
         return self._blend_val
 
@@ -187,8 +187,8 @@ class _AppIconButton(QWidget):
 class _TitleBar(QWidget):
     """Draggable title bar with centered app name and window controls."""
 
-    update_clicked = pyqtSignal()
-    icon_clicked   = pyqtSignal()
+    update_clicked = Signal()
+    icon_clicked   = Signal()
 
     def __init__(self, title: str, parent: QWidget | None = None):
         super().__init__(parent)
@@ -317,9 +317,6 @@ class _TitleBar(QWidget):
     def mouseReleaseEvent(self, event):
         self._drag_pos = None
         super().mouseReleaseEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        super().mouseDoubleClickEvent(event)
 
     def enterEvent(self, event) -> None:
         self._icon_btn.set_forced_hover(True)
@@ -653,9 +650,9 @@ class _BookmarkDialog(QDialog):
 
 class _BookmarkCard(QWidget):
     """Compact gallery card showing bookmark details."""
-    clicked = pyqtSignal(dict)
-    edit_clicked = pyqtSignal(dict)
-    delete_clicked = pyqtSignal(dict)
+    clicked = Signal(dict)
+    edit_clicked = Signal(dict)
+    delete_clicked = Signal(dict)
 
     def __init__(self, data: dict, parent=None):
         super().__init__(parent)
@@ -745,7 +742,7 @@ class _BookmarkCard(QWidget):
 
 class _AddBookmarkPlaceholder(QWidget):
     """The '+' card at the end of the gallery."""
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1009,7 +1006,7 @@ class _NavIcon(QWidget):
 class _SidebarNavItem(QWidget):
     """Sidebar row: vector icon on the left, text label that clips when narrow."""
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, icon_kind: int, label: str, parent=None):
         super().__init__(parent)
@@ -1107,7 +1104,7 @@ class _SidebarNavItem(QWidget):
 class _IconButton(QWidget):
     """Transparent icon button — color-only hover, no background box."""
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, icon_kind: int, tooltip: str = "", parent=None, size: tuple[int, int] | None = None):
         super().__init__(parent)
@@ -1336,17 +1333,14 @@ class CoordWindow(QWidget):
     Emits target_set(lat, lon, radius_m) and target_cleared().
     """
 
-    target_set     = pyqtSignal(float, float, float, object, str)  # lat, lon, radius_m, body_name, system
-    target_cleared = pyqtSignal()
-    move_overlay   = pyqtSignal()
-    toggle_overlay = pyqtSignal()
-    apply_update   = pyqtSignal(str, str)  # (version, path_to_new_exe)
+    target_set     = Signal(float, float, float, object, str)  # lat, lon, radius_m, body_name, system
+    target_cleared = Signal()
+    move_overlay   = Signal()
+    toggle_overlay = Signal()
 
     # UI constants (referenced from top-level style section)
-    _TITLE_BAR_H      = _TITLE_BAR_H
-    _SIDEBAR_ICON_W   = _SIDEBAR_ICON_W
-    _SIDEBAR_FULL_W   = _SIDEBAR_FULL_W
-    _SIDEBAR_HEADER_H = _SIDEBAR_HEADER_H
+    _TITLE_BAR_H       = _TITLE_BAR_H
+    _SIDEBAR_FULL_W    = _SIDEBAR_FULL_W
     _FIXED_W, _FIXED_H = _FIXED_W, _FIXED_H
 
     def __init__(self, parent=None):
@@ -1424,7 +1418,7 @@ class CoordWindow(QWidget):
         path.closeSubpath()
         self._body.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
-    @pyqtProperty(int)
+    @Property(int)
     def sidebarWidth(self) -> int:
         return self._sidebar_w_cur
 
@@ -1455,21 +1449,12 @@ class CoordWindow(QWidget):
         """Update the toggle button text based on overlay visibility."""
         self._toggle_btn.setText("Hide overlay" if visible else "Show overlay")
 
-    def show_update_available(self, version: str) -> None:
-        """Show the update button in a 'downloading' state."""
-        self._update_version = version
-        self._update_new_exe: str | None = None
+    def show_update_available(self, version: str, releases_url: str) -> None:
+        """Show the update button; clicking it opens the GitHub releases page."""
+        self._update_releases_url = releases_url
         self._title_bar._update_btn.setVisible(True)
         self._title_bar._update_btn.setToolTip(
-            f"v{version} available — downloading..."
-        )
-
-    def show_update_ready(self, version: str, new_exe_path: str) -> None:
-        """Update is downloaded; prompt the user to restart."""
-        self._update_version = version
-        self._update_new_exe = new_exe_path
-        self._title_bar._update_btn.setToolTip(
-            f"v{version} ready — click to restart and update"
+            f"v{version} available — click to open download page"
         )
 
 
@@ -2049,7 +2034,7 @@ class CoordWindow(QWidget):
 
         for lib, note in (
             ("Python 3",    "Core runtime"),
-            ("PyQt6",       "GUI framework — Qt6 bindings"),
+            ("PySide6",       "GUI framework — Qt6 bindings"),
             ("PyInstaller", "Windows executable packaging"),
         ):
             dep_row = QHBoxLayout()
@@ -2336,9 +2321,11 @@ class CoordWindow(QWidget):
         self._update_preview_marker()
 
     def _on_update_clicked(self) -> None:
-        """Apply the update if the download is ready; ignore if still downloading."""
-        if getattr(self, "_update_new_exe", None):
-            self.apply_update.emit(self._update_version, self._update_new_exe)
+        """Open the GitHub releases page in the user's default browser."""
+        url = getattr(self, "_update_releases_url", None)
+        if url:
+            import webbrowser
+            webbrowser.open(url)
 
     def _on_body_name_changed(self, text: str) -> None:
         """Track body selection state as the user types; preview is not shown yet.

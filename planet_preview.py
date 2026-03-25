@@ -8,11 +8,11 @@
 import math
 import time
 
-from PyQt6.QtCore    import Qt, QPointF, QRectF, QTimer, pyqtSignal
-from PyQt6.QtGui     import (
+from PySide6.QtCore    import Qt, QPointF, QRectF, QTimer, Signal
+from PySide6.QtGui     import (
     QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QRadialGradient,
 )
-from PyQt6.QtWidgets import QSizePolicy, QWidget
+from PySide6.QtWidgets import QSizePolicy, QWidget
 
 _GRID_STEP          = 30     # degrees between lat/lon grid lines
 _STEPS              = 90     # segments per grid line (higher = smoother arcs)
@@ -36,7 +36,7 @@ class PlanetPreviewWidget(QWidget):
         coord_picked(lat, lon)  — emitted when the user clicks a point on the surface
     """
 
-    coord_picked = pyqtSignal(float, float)
+    coord_picked = Signal(float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -66,7 +66,6 @@ class PlanetPreviewWidget(QWidget):
         self.setMinimumSize(210, 210)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setCursor(Qt.CursorShape.ArrowCursor)
-        self.setToolTip("")
 
     # ------------------------------------------------------------------
     # Public API

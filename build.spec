@@ -69,10 +69,9 @@ a = Analysis(
     binaries=[],
     datas=[],
     hiddenimports=[
-        "PyQt6.QtCore",
-        "PyQt6.QtGui",
-        "PyQt6.QtWidgets",
-        "PyQt6.sip",
+        "PySide6.QtCore",
+        "PySide6.QtGui",
+        "PySide6.QtWidgets",
     ],
     hookspath=[],
     hooksconfig={},

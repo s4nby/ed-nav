@@ -11,12 +11,10 @@
 #
 
 import ctypes
-import os
-import subprocess
 import sys
 
-from PyQt6.QtCore    import QSettings, QTimer
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtCore    import QSettings, QTimer
+from PySide6.QtWidgets import QApplication
 
 from coord_window import CoordWindow
 from hotkey       import GlobalHotkey
@@ -28,21 +26,7 @@ from updater      import UpdateChecker
 from constants    import POLL_INTERVAL_MS, VERSION, GITHUB_REPO
 
 
-def _cleanup_old_exe() -> None:
-    """Remove ed_navigator.old left behind by a previous in-app update."""
-    if not getattr(sys, "frozen", False):
-        return
-    old_path = os.path.join(os.path.dirname(sys.executable), "ed_navigator.old")
-    try:
-        if os.path.exists(old_path):
-            os.remove(old_path)
-    except OSError:
-        pass
-
-
 def main():
-    _cleanup_old_exe()
-
     # Give this process its own App User Model ID so Windows uses the
     # Qt window icon for the taskbar button instead of python.exe's icon.
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ED.Navigator.App")
@@ -93,8 +77,7 @@ def main():
     # State flags
     # ------------------------------------------------------------------
     _state = {
-        "overlay_visible": True,
-        "move_mode":       False,
+        "move_mode": False,
     }
 
     # ------------------------------------------------------------------
@@ -103,7 +86,6 @@ def main():
     def _toggle_overlay():
         new_visible = overlay.toggle_visibility()
         incl_overlay.setVisible(new_visible)
-        _state["overlay_visible"] = new_visible
         tray.set_overlay_visible(new_visible)
         coord_window.set_overlay_visible(new_visible)
         # If we're hiding while in move mode, exit move mode too
@@ -123,7 +105,6 @@ def main():
         # Make overlay visible first so the user can see and drag it
         if not overlay.isVisible():
             overlay.show()
-            _state["overlay_visible"] = True
             tray.set_overlay_visible(True)
             coord_window.set_overlay_visible(True)
         overlay.enter_move_mode()
@@ -138,37 +119,12 @@ def main():
         _state["move_mode"] = False
 
     # ------------------------------------------------------------------
-    # In-app update apply
-    # ------------------------------------------------------------------
-    def _do_apply_update(version: str, new_exe_path: str) -> None:
-        """Swap in the downloaded exe and relaunch. No-op outside frozen build."""
-        if not getattr(sys, "frozen", False):
-            return
-        exe_path = sys.executable
-        old_path = os.path.join(os.path.dirname(exe_path), "ed_navigator.old")
-        try:
-            _on_quit()
-            if os.path.exists(old_path):
-                os.remove(old_path)
-            os.rename(exe_path, old_path)
-            os.rename(new_exe_path, exe_path)
-            subprocess.Popen([exe_path])
-            sys.exit(0)
-        except Exception:
-            # Rollback: restore original exe so the app stays functional.
-            try:
-                if not os.path.exists(exe_path) and os.path.exists(old_path):
-                    os.rename(old_path, exe_path)
-            except OSError:
-                pass
-
-    # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
     # Update checker
-    updater.update_available.connect(coord_window.show_update_available)
-    updater.update_ready.connect(coord_window.show_update_ready)
-    coord_window.apply_update.connect(_do_apply_update)
+    updater.update_available.connect(
+        lambda v: coord_window.show_update_available(v, updater.releases_url)
+    )
     updater.start()
 
     hotkey.activated.connect(_toggle_overlay)
@@ -224,12 +180,8 @@ def main():
         settings.setValue("journal/last_system", journal.get_system())
         hotkey.close()
 
-    def _quit():
-        _on_quit()
-        sys.exit(0)
-
     app.aboutToQuit.connect(_on_quit)
-    tray.quit_app.connect(_quit)
+    tray.quit_app.connect(app.quit)
 
     sys.exit(app.exec())
 
